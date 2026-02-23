@@ -189,7 +189,7 @@ impl AlignmentFilteringOutput {
 
 /// Build overlap graph from overlaps
 pub fn run_create_overlap_graph(
-    overlaps: HashMap<(usize, usize), Overlap>,
+    overlaps: &HashMap<(usize, usize), Overlap>,
 ) -> Result<OverlapGraph, io::Error> {
     println!("=== OVERLAP GRAPH CREATION ===");
     let mut g = OverlapGraph::new();
