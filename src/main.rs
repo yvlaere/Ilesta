@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let file = File::open(&overlaps_path_str)?;
             let reader = BufReader::new(file);
             let overlaps: HashMap<(usize, usize), Overlap> = bincode::deserialize_from(reader)?;
-            let mut graph = create_overlap_graph::run_create_overlap_graph(overlaps)?;
+            let mut graph = create_overlap_graph::run_create_overlap_graph(&overlaps)?;
 
             // Graph simplification: iterative cleanup
             graph_analysis::check_synchronization(&graph);
@@ -110,11 +110,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 //heuristic simplification: remove short edges
                 //println!("Applying heuristic simplification: removing short edges...");
-                let n_short = heuristic_simplification::remove_short_edges(
-                    &mut graph,
-                    config.short_edge_ratio,
-                );
+                let n_short = heuristic_simplification::remove_short_edges(&mut graph, config.short_edge_ratio);
                 println!("Removed {} short edges", n_short);
+
+                graph_analysis::check_synchronization(&graph);
 
                 // bubble removal
                 let node_count_before = graph.nodes.len();
@@ -188,7 +187,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             let gfa_path = out_dir.join(format!("{}.gfa", config.output_prefix));
             let gfa_str = gfa_path.to_str().ok_or("invalid output path")?;
-            compressed.write_gfa(gfa_str)?;
+            compressed.write_gfa(gfa_str, &overlaps)?;
             println!("Wrote GFA to {}", gfa_str);
 
             println!("\n=== ASSEMBLY COMPLETE ===");

@@ -1,4 +1,6 @@
 use crate::utils;
+use crate::create_overlap_graph::OverlapGraph;
+use crate::alignment_filtering::Overlap;
 /// graph compression module
 /// creates a compressed graph of unitigs from an overlap graph
 /// 1. get the indegree and outdegree of each node
@@ -19,11 +21,6 @@ pub struct Unitig {
     pub fasta_seq: Option<String>,
 }
 
-pub struct CompressedGraph {
-    pub unitigs: Vec<Unitig>,
-    pub edges: Vec<UnitigEdge>,
-}
-
 pub struct UnitigEdge {
     pub from: usize,
     pub to: usize,
@@ -32,12 +29,90 @@ pub struct UnitigEdge {
     pub identity: f64,
 }
 
+pub struct CompressedGraph {
+    pub unitigs: Vec<Unitig>,
+    pub edges: Vec<UnitigEdge>,
+}
+
+impl CompressedGraph {
+    pub fn write_gfa(&self, path: &str, overlaps: &HashMap<(usize, usize), Overlap>) -> Result<(), Box<dyn std::error::Error>> {
+        let mut file = std::fs::File::create(path)?;
+        use std::io::Write;
+        // header
+        writeln!(file, "H\tVN:Z:1.0")?;
+
+        // segments
+        for u in &self.unitigs {
+            let sid = format!("unitig_{}", u.id);
+            let seq = u.fasta_seq.as_ref().map(|s| s.as_str()).unwrap_or("*");
+            writeln!(file, "S\t{}\t{}", sid, seq)?;
+        }
+
+        // links (including circularising links)
+        let mut edge_set = std::collections::HashSet::new();
+        for e in &self.edges {
+            let from = format!("unitig_{}", e.from);
+            let to = format!("unitig_{}", e.to);
+            let cigar = format!("{}M", e.overlap_len);
+            writeln!(file, "L\t{}\t+\t{}\t+\t{}", from, to, cigar)?;
+            edge_set.insert((e.from, e.to));
+        }
+
+        // Add circularising links for unitigs that are circular (first member's node_id == last member's edge.0)
+        for u in &self.unitigs {
+            if u.members.len() > 1 {
+                let first = &u.members[0].node_id;
+                let last_edge = &u.members[u.members.len() - 1].edge;
+                let last = &last_edge.0;
+                // If last edge points back to first node, and not already in edge_set
+                if !last.is_empty() && last == first {
+                    let from = format!("unitig_{}", u.id);
+                    let to = format!("unitig_{}", u.id);
+                    let cigar = format!("{}M", last_edge.1);
+                    if !edge_set.contains(&(u.id, u.id)) {
+                        writeln!(file, "L\t{}\t+\t{}\t+\t{}", from, to, cigar)?;
+                    }
+                }
+
+                // if there is an overlap between the first and last unitig members in overlaps, add a link between them
+                for ((_query_id, _target_id), o) in overlaps.iter() {
+                    if (o.source_name == *first && o.sink_name == *last)  || 
+                    (o.source_name == *last && o.sink_name == *first) || 
+                    (o.source_name == utils::rc_node(last) && o.sink_name == utils::rc_node(first)) ||
+                    (o.source_name == utils::rc_node(first) && o.sink_name == utils::rc_node(last)) {
+                        let from = format!("unitig_{}", u.id);
+                        let to = format!("unitig_{}", u.id);
+                        let cigar = format!("{}M", o.overlap_len);
+                        writeln!(file, "L\t{}\t+\t{}\t+\t{}", from, to, cigar)?;
+                    }
+                }
+            }
+        }
+
+        // 'a' lines: annotate which reads were used to create each unitig
+        for u in &self.unitigs {
+            let sid = format!("unitig_{}", u.id);
+            let mut reads = std::collections::HashSet::new();
+            for m in &u.members {
+                // node_id is like "read_id+" or "read_id-"
+                let node_id = &m.node_id;
+                if node_id.len() > 1 {
+                    reads.insert(node_id[..node_id.len()-1].to_string());
+                }
+            }
+            let mut reads_vec: Vec<_> = reads.into_iter().collect();
+            reads_vec.sort();
+            let reads_str = reads_vec.join(",");
+            writeln!(file, "a\t{}\treads:{}", sid, reads_str)?;
+        }
+
+        Ok(())
+    }
+}
+
 /// Main function: compress maximal non-branching paths into unitigs.
 /// Preserves member lists and the overlap lengths between them.
-pub fn compress_unitigs(
-    graph: &crate::create_overlap_graph::OverlapGraph,
-    fastq_path: &str,
-    fasta_path: &str,
+pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str,
 ) -> CompressedGraph {
     // 1) create a map of indegrees
     let mut indegree: HashMap<String, usize> = HashMap::new();
@@ -55,7 +130,7 @@ pub fn compress_unitigs(
 
     // Helper to extract the single outgoing neighbor if outdeg == 1
     let out_single =
-        |g: &crate::create_overlap_graph::OverlapGraph, cur: &str| -> Option<(String, u32)> {
+        |g: &OverlapGraph, cur: &str| -> Option<(String, u32)> {
             g.nodes.get(cur).and_then(|n| {
                 if n.edges.len() == 1 {
                     let e = &n.edges[0];
@@ -264,33 +339,6 @@ pub fn compress_unitigs(
     CompressedGraph { unitigs, edges }
 }
 
-impl CompressedGraph {
-    pub fn write_gfa(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let mut file = std::fs::File::create(path)?;
-        use std::io::Write;
-        // header
-        writeln!(file, "H\tVN:Z:1.0")?;
-
-        // segments
-        for u in &self.unitigs {
-            let sid = format!("unitig_{}", u.id);
-            let seq = u.fasta_seq.as_ref().map(|s| s.as_str()).unwrap_or("*");
-            writeln!(file, "S\t{}\t{}", sid, seq)?;
-        }
-
-        // links
-        for e in &self.edges {
-            let from = format!("unitig_{}", e.from);
-            let to = format!("unitig_{}", e.to);
-            // represent overlap as CIGAR M operation
-            let cigar = format!("{}M", e.overlap_len);
-            writeln!(file, "L\t{}\t+\t{}\t+\t{}", from, to, cigar)?;
-        }
-
-        Ok(())
-    }
-}
-
 fn load_fastq_sequences(fastq_path: &str) -> Result<HashMap<String, String>, String> {
     let mut seq_map: HashMap<String, String> = HashMap::new();
 
@@ -328,7 +376,7 @@ fn load_fastq_sequences(fastq_path: &str) -> Result<HashMap<String, String>, Str
 /// removing overlaps recorded in UnitigMember.edge.(target, edge_len).
 pub fn unitig_sequence(
     unitig: &Unitig,
-    graph: &crate::create_overlap_graph::OverlapGraph,
+    graph: &OverlapGraph,
     fastq_seqs: HashMap<String, String>,
 ) -> Result<String, String> {
     if unitig.members.is_empty() {
