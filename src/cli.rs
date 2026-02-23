@@ -116,7 +116,7 @@ pub struct AssembleArgs {
     pub fuzz: u32,
 
     /// Number of cleanup iterations to run
-    #[arg(long, default_value_t = 2u32)]
+    #[arg(long, default_value_t = 3u32)]
     pub cleanup_iterations: u32,
 
     /// Short edge removal ratio (heuristic simplification)
