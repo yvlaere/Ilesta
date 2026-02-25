@@ -36,6 +36,7 @@ pub struct CompressedGraph {
 
 impl CompressedGraph {
     pub fn write_gfa(&self, path: &str, overlaps: &HashMap<(usize, usize), Overlap>) -> Result<(), Box<dyn std::error::Error>> {
+
         let mut file = std::fs::File::create(path)?;
         use std::io::Write;
         // header
@@ -75,11 +76,12 @@ impl CompressedGraph {
                 }
 
                 // if there is an overlap between the first and last unitig members in overlaps, add a link between them
-                for ((_query_id, _target_id), o) in overlaps.iter() {
-                    if (o.source_name == *first && o.sink_name == *last)  || 
-                    (o.source_name == *last && o.sink_name == *first) || 
-                    (o.source_name == utils::rc_node(last) && o.sink_name == utils::rc_node(first)) ||
-                    (o.source_name == utils::rc_node(first) && o.sink_name == utils::rc_node(last)) {
+                for ((_q, _t), o) in overlaps.iter() {
+                    if (o.source_name == *first && o.sink_name == *last)
+                        || (o.source_name == *last && o.sink_name == *first)
+                        || (o.rc_source_name == *first && o.rc_sink_name == *last)
+                        || (o.rc_source_name == *last && o.rc_sink_name == *first)
+                    {
                         let from = format!("unitig_{}", u.id);
                         let to = format!("unitig_{}", u.id);
                         let cigar = format!("{}M", o.overlap_len);
@@ -91,23 +93,83 @@ impl CompressedGraph {
 
         // 'a' lines: annotate which reads were used to create each unitig
         for u in &self.unitigs {
-            let sid = format!("unitig_{}", u.id);
-            let mut reads = std::collections::HashSet::new();
-            for m in &u.members {
-                // node_id is like "read_id+" or "read_id-"
-                let node_id = &m.node_id;
-                if node_id.len() > 1 {
-                    reads.insert(node_id[..node_id.len()-1].to_string());
-                }
+            let utg_name = format!("unitig_{}", u.id);
+            let mut utg_pos: u32 = 0;
+
+            for (i, m) in u.members.iter().enumerate() {
+                // for all but the last member, use edge.1
+                // for the last member, take its full contribution
+                let contrib_len = if i == u.members.len() - 1 {
+                    // last member: assume parse_node_id gives the coverage slice length
+                    let (_read_name, read_start, read_end, _ori) =
+                        parse_node_id(&m.node_id)
+                            .map_err(|e| format!("a-line error: {}", e))?;
+                    read_end - read_start
+                } else {
+                    m.edge.1
+                };
+
+                let (read_name, read_start, read_end, ori) =
+                    parse_node_id(&m.node_id)
+                        .map_err(|e| format!("a-line error: {}", e))?;
+
+                let utg_start = utg_pos;
+                let utg_end = utg_pos + contrib_len;
+
+                writeln!(
+                    file,
+                    "a\t{}\t{}\t{}:{}-{}\t{}\t{}",
+                    utg_name,
+                    utg_start,
+                    read_name,
+                    read_start,
+                    read_end,
+                    ori,
+                    utg_end
+                )?;
+
+                utg_pos = utg_end;
             }
-            let mut reads_vec: Vec<_> = reads.into_iter().collect();
-            reads_vec.sort();
-            let reads_str = reads_vec.join(",");
-            writeln!(file, "a\t{}\treads:{}", sid, reads_str)?;
         }
 
         Ok(())
     }
+}
+
+// helper function to parse the node_id format "read_name:start-end+/-" and extract the read_name and orientation
+fn parse_node_id(node_id: &str) -> Result<(&str, u32, u32, char), String> {
+    let ori = node_id
+        .chars()
+        .last()
+        .ok_or_else(|| format!("node_id '{}' missing orientation", node_id))?;
+
+    if ori != '+' && ori != '-' {
+        return Err(format!("invalid orientation '{}' in '{}'", ori, node_id));
+    }
+
+    let core = &node_id[..node_id.len() - 1];
+
+    let (read_name, range) = core
+        .split_once(':')
+        .ok_or_else(|| format!("node_id '{}' missing ':'", node_id))?;
+
+    let (start, end) = range
+        .split_once('-')
+        .ok_or_else(|| format!("node_id '{}' missing '-'", node_id))?;
+
+    let start: u32 = start
+        .parse()
+        .map_err(|_| format!("invalid start '{}' in '{}'", start, node_id))?;
+
+    let end: u32 = end
+        .parse()
+        .map_err(|_| format!("invalid end '{}' in '{}'", end, node_id))?;
+
+    if start >= end {
+        return Err(format!("invalid interval {}-{} in '{}'", start, end, node_id));
+    }
+
+    Ok((read_name, start, end, ori))
 }
 
 /// Main function: compress maximal non-branching paths into unitigs.
@@ -385,29 +447,28 @@ pub fn unitig_sequence(
 
     // Helper to get sequence for a node id
     let get_seq = |node_id: &str| -> Result<String, String> {
-        // Node ID must end with '+' or '-'
-        let orientation = node_id
-            .chars()
-            .last()
-            .ok_or_else(|| format!("node id '{}' has no orientation suffix (+/-)", node_id))?;
-        let read_id = &node_id[..node_id.len() - 1];
-        let _node = graph
-            .nodes
-            .get(node_id)
-            .ok_or_else(|| format!("node_id '{}' not found in overlap graph", node_id))?;
-        let seq = fastq_seqs.get(read_id).ok_or_else(|| {
+        
+        let (read_name, read_start, read_end, ori) =
+                    parse_node_id(node_id)
+                        .map_err(|e| format!("get_seq error for node_id '{}': {}", node_id, e))?;
+
+        let full_seq = fastq_seqs.get(read_name).ok_or_else(|| {
             format!(
                 "sequence for read_id '{}' not found in FASTQ sequences",
-                read_id
+                read_name
             )
         })?;
-        match orientation {
-            '+' => Ok(seq.clone()),
-            '-' => Ok(utils::rev_comp(seq)),
-            _ => Err(format!(
-                "invalid orientation '{}' in node id '{}'",
-                orientation, node_id
-            )),
+
+        let start = read_start as usize;
+        let end   = read_end as usize;
+
+        // slice as bytes, then convert back to String
+        let slice = &full_seq[start..end];
+
+        match ori {
+            '+' => Ok(slice.to_string()),
+            '-' => Ok(utils::rev_comp(slice)), // assuming rev_comp takes &str and returns String
+            _ => Err(format!("invalid orientation '{}' in node id '{}'", ori, node_id)),
         }
     };
 
