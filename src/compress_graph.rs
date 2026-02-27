@@ -72,6 +72,7 @@ impl CompressedGraph {
                     let cigar = format!("{}M", last_edge.1);
                     if !edge_set.contains(&(u.id, u.id)) {
                         writeln!(file, "L\t{}\t+\t{}\t+\t{}", from, to, cigar)?;
+                        writeln!(file, "L\t{}\t-\t{}\t-\t{}", from, to, cigar)?;
                     }
                 }
 
@@ -373,7 +374,48 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
         }
     }
 
-    let edges: Vec<UnitigEdge> = unitig_edge_map.into_values().collect();
+    let mut edges: Vec<UnitigEdge> = unitig_edge_map.into_values().collect();
+
+    // remove one orientation of every unitig pair
+
+    // helper function to strip the orientation from a node_id
+    fn stripped_node_id(node_id: &str) -> String {
+        let (read, start, end, _) = parse_node_id(node_id).unwrap();
+        format!("{}:{}-{}", read, start, end)
+    }
+
+    // helper function to get the signature of a unitig
+    fn unitig_signature(u: &Unitig) -> (Vec<(String)>) {
+        let mut sig: Vec<(String)> = u.members
+            .iter()
+            .map(|m| (stripped_node_id(&m.node_id)))
+            .collect();
+
+        // sort the signature to make it comparable
+        sig.sort_unstable();
+        sig
+    }
+
+    let mut seen: HashSet<Vec<(String)>> = HashSet::new();
+    let mut keep: HashSet<usize> = HashSet::new();
+
+    for u in unitigs.iter() {
+        let sig = unitig_signature(u);
+
+        // print the signature for debugging
+        println!("Unitig {} signature: {:?}", u.id, sig);
+
+        if seen.insert(sig) {
+            keep.insert(u.id);
+        }
+    }
+
+    // remove unitigs
+    unitigs.retain(|u| keep.contains(&u.id));
+
+    // remove edges touching dropped unitigs
+    edges.retain(|e| keep.contains(&e.from) && keep.contains(&e.to));
+
 
     // load fastq sequences
     println!("Loading FASTQ sequences from {}...", fastq_path);
