@@ -384,7 +384,7 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
         format!("{}:{}-{}", read, start, end)
     }
 
-    // helper function to get the signature of a unitig
+    // helper function to get the signature (vector of member names) of a unitig
     fn unitig_signature(u: &Unitig) -> (Vec<(String)>) {
         let mut sig: Vec<(String)> = u.members
             .iter()
@@ -396,17 +396,24 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
         sig
     }
 
-    let mut seen: HashSet<Vec<(String)>> = HashSet::new();
+    // vector of all reads that have been used in unitigs
+    let mut seen: HashSet<String> = HashSet::new();
+    // unitigs that should be kept
     let mut keep: HashSet<usize> = HashSet::new();
+
+    unitigs.sort_unstable_by_key(|u| std::cmp::Reverse(u.members.len()));
 
     for u in unitigs.iter() {
         let sig = unitig_signature(u);
 
-        // print the signature for debugging
-        println!("Unitig {} signature: {:?}", u.id, sig);
-
-        if seen.insert(sig) {
-            keep.insert(u.id);
+        for n in sig.iter() {
+            if !seen.contains(n) {
+                for s in sig.iter() {
+                    seen.insert(s.clone());
+                }
+                keep.insert(u.id);
+                break;
+            }
         }
     }
 
