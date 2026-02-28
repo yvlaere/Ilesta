@@ -471,12 +471,13 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
         let seq = unitig_sequence(unitig, graph, fastq_seqs.clone()).unwrap();
         unitig.fasta_seq = Some(seq);
     }
+
     // write to fasta file
     {
         let mut fasta_file = std::fs::File::create(fasta_path).unwrap();
         for unitig in unitigs.iter() {
             let seq = unitig.fasta_seq.as_ref().unwrap();
-            let header = format!(">unitig_{} len={}bp\n", unitig.id, seq.len());
+            let header = format!(">unitig_{} len={}bp topology={}\n", unitig.id, seq.len(), unitig.topology);
             use std::io::Write;
             fasta_file.write_all(header.as_bytes()).unwrap();
             fasta_file.write_all(seq.as_bytes()).unwrap();
