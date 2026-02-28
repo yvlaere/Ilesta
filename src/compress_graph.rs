@@ -1,6 +1,6 @@
-use crate::utils;
-use crate::create_overlap_graph::OverlapGraph;
 use crate::alignment_filtering::Overlap;
+use crate::create_overlap_graph::OverlapGraph;
+use crate::utils;
 /// graph compression module
 /// creates a compressed graph of unitigs from an overlap graph
 /// 1. get the indegree and outdegree of each node
@@ -38,8 +38,11 @@ pub struct CompressedGraph {
 }
 
 impl CompressedGraph {
-    pub fn write_gfa(&mut self, path: &str, overlaps: &HashMap<(usize, usize), Overlap>) -> Result<(), Box<dyn std::error::Error>> {
-
+    pub fn write_gfa(
+        &mut self,
+        path: &str,
+        overlaps: &HashMap<(usize, usize), Overlap>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut file = std::fs::File::create(path)?;
         use std::io::Write;
         // header
@@ -92,12 +95,24 @@ impl CompressedGraph {
         let mut edge_set = std::collections::HashSet::new();
         for e in &self.edges {
             // get from unitig
-            let from_utg = self.unitigs.iter().find(|u| u.id == e.from).ok_or("invalid edge: from unitig not found")?;
-            let to_utg = self.unitigs.iter().find(|u| u.id == e.to).ok_or("invalid edge: to unitig not found")?;
+            let from_utg = self
+                .unitigs
+                .iter()
+                .find(|u| u.id == e.from)
+                .ok_or("invalid edge: from unitig not found")?;
+            let to_utg = self
+                .unitigs
+                .iter()
+                .find(|u| u.id == e.to)
+                .ok_or("invalid edge: to unitig not found")?;
             let from = format!("unitig_{}_{}", e.from, from_utg.topology);
             let to = format!("unitig_{}_{}", e.to, to_utg.topology);
             let cigar = format!("{}M", e.overlap_len);
-            writeln!(file, "L\t{}\t{}\t{}\t{}\t{}", from, e.from_ori, to, e.to_ori, cigar)?;
+            writeln!(
+                file,
+                "L\t{}\t{}\t{}\t{}\t{}",
+                from, e.from_ori, to, e.to_ori, cigar
+            )?;
             edge_set.insert((e.from, e.to));
         }
 
@@ -112,16 +127,14 @@ impl CompressedGraph {
                 let contrib_len = if i == u.members.len() - 1 {
                     // last member: assume parse_node_id gives the coverage slice length
                     let (_read_name, read_start, read_end, _ori) =
-                        parse_node_id(&m.node_id)
-                            .map_err(|e| format!("a-line error: {}", e))?;
+                        parse_node_id(&m.node_id).map_err(|e| format!("a-line error: {}", e))?;
                     read_end - read_start
                 } else {
                     m.edge.1
                 };
 
                 let (read_name, read_start, read_end, ori) =
-                    parse_node_id(&m.node_id)
-                        .map_err(|e| format!("a-line error: {}", e))?;
+                    parse_node_id(&m.node_id).map_err(|e| format!("a-line error: {}", e))?;
 
                 let utg_start = utg_pos;
                 let utg_end = utg_pos + contrib_len;
@@ -129,13 +142,7 @@ impl CompressedGraph {
                 writeln!(
                     file,
                     "a\t{}\t{}\t{}:{}-{}\t{}\t{}",
-                    utg_name,
-                    utg_start,
-                    read_name,
-                    read_start,
-                    read_end,
-                    ori,
-                    utg_end
+                    utg_name, utg_start, read_name, read_start, read_end, ori, utg_end
                 )?;
 
                 utg_pos = utg_end;
@@ -176,7 +183,10 @@ fn parse_node_id(node_id: &str) -> Result<(&str, u32, u32, char), String> {
         .map_err(|_| format!("invalid end '{}' in '{}'", end, node_id))?;
 
     if start >= end {
-        return Err(format!("invalid interval {}-{} in '{}'", start, end, node_id));
+        return Err(format!(
+            "invalid interval {}-{} in '{}'",
+            start, end, node_id
+        ));
     }
 
     Ok((read_name, start, end, ori))
@@ -184,7 +194,10 @@ fn parse_node_id(node_id: &str) -> Result<(&str, u32, u32, char), String> {
 
 /// Main function: compress maximal non-branching paths into unitigs.
 /// Preserves member lists and the overlap lengths between them.
-pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str,
+pub fn compress_unitigs(
+    graph: &OverlapGraph,
+    fastq_path: &str,
+    fasta_path: &str,
 ) -> CompressedGraph {
     // 1) create a map of indegrees
     let mut indegree: HashMap<String, usize> = HashMap::new();
@@ -201,17 +214,16 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
     let mut unitigs: Vec<Unitig> = Vec::new();
 
     // Helper to extract the single outgoing neighbor if outdeg == 1
-    let out_single =
-        |g: &OverlapGraph, cur: &str| -> Option<(String, u32)> {
-            g.nodes.get(cur).and_then(|n| {
-                if n.edges.len() == 1 {
-                    let e = &n.edges[0];
-                    Some((e.target_id.clone(), e.edge_len))
-                } else {
-                    None
-                }
-            })
-        };
+    let out_single = |g: &OverlapGraph, cur: &str| -> Option<(String, u32)> {
+        g.nodes.get(cur).and_then(|n| {
+            if n.edges.len() == 1 {
+                let e = &n.edges[0];
+                Some((e.target_id.clone(), e.edge_len))
+            } else {
+                None
+            }
+        })
+    };
 
     // 2) non-circular unitigs, start unitigs at nodes where indegree != 1 || outdeg != 1
     for (id, node) in &graph.nodes {
@@ -282,7 +294,6 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
                 members.push(UnitigMember {
                     node_id: cur.clone(),
                     edge: (String::new(), 0),
-
                 });
 
                 // create the unitig
@@ -358,7 +369,7 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
     let mut node_to_unitig: HashMap<String, usize> = HashMap::new();
     for u in &unitigs {
         let start = u.members.first().unwrap().node_id.clone();
-        let end   = u.members.last().unwrap().node_id.clone();
+        let end = u.members.last().unwrap().node_id.clone();
         unitig_ends.insert(u.id, (start, end));
 
         for m in &u.members {
@@ -371,7 +382,7 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
         if let Some(&from_uid) = node_to_unitig.get(source_id) {
             let (from_start, from_end) = &unitig_ends[&from_uid];
             let from_is_start = source_id == from_start;
-            let from_is_end   = source_id == from_end;
+            let from_is_end = source_id == from_end;
             let from_orient = if from_is_start { '+' } else { '-' };
 
             for e in &node.edges {
@@ -382,7 +393,7 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
 
                     let (to_start, to_end) = &unitig_ends[&to_uid];
                     let to_is_start = e.target_id == *to_start;
-                    let to_is_end   = e.target_id == *to_end;
+                    let to_is_end = e.target_id == *to_end;
                     let to_orient = if to_is_start { '+' } else { '-' };
 
                     let key = (from_uid, to_uid, from_orient, to_orient);
@@ -423,7 +434,8 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
 
     // helper function to get the signature (vector of member names) of a unitig
     fn unitig_signature(u: &Unitig) -> Vec<String> {
-        let mut sig: Vec<String> = u.members
+        let mut sig: Vec<String> = u
+            .members
             .iter()
             .map(|m| stripped_node_id(&m.node_id))
             .collect();
@@ -460,7 +472,6 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
     // remove edges touching dropped unitigs
     edges.retain(|e| keep.contains(&e.from) && keep.contains(&e.to));
 
-
     // load fastq sequences
     println!("Loading FASTQ sequences from {}...", fastq_path);
     let fastq_seqs = load_fastq_sequences(fastq_path).unwrap();
@@ -477,7 +488,12 @@ pub fn compress_unitigs(graph: &OverlapGraph, fastq_path: &str, fasta_path: &str
         let mut fasta_file = std::fs::File::create(fasta_path).unwrap();
         for unitig in unitigs.iter() {
             let seq = unitig.fasta_seq.as_ref().unwrap();
-            let header = format!(">unitig_{} len={}bp topology={}\n", unitig.id, seq.len(), unitig.topology);
+            let header = format!(
+                ">unitig_{} len={}bp topology={}\n",
+                unitig.id,
+                seq.len(),
+                unitig.topology
+            );
             use std::io::Write;
             fasta_file.write_all(header.as_bytes()).unwrap();
             fasta_file.write_all(seq.as_bytes()).unwrap();
@@ -534,10 +550,8 @@ pub fn unitig_sequence(
 
     // Helper to get sequence for a node id
     let get_seq = |node_id: &str| -> Result<String, String> {
-        
-        let (read_name, read_start, read_end, ori) =
-                    parse_node_id(node_id)
-                        .map_err(|e| format!("get_seq error for node_id '{}': {}", node_id, e))?;
+        let (read_name, read_start, read_end, ori) = parse_node_id(node_id)
+            .map_err(|e| format!("get_seq error for node_id '{}': {}", node_id, e))?;
 
         let full_seq = fastq_seqs.get(read_name).ok_or_else(|| {
             format!(
@@ -547,7 +561,7 @@ pub fn unitig_sequence(
         })?;
 
         let start = read_start as usize;
-        let end   = read_end as usize;
+        let end = read_end as usize;
 
         // slice as bytes, then convert back to String
         let slice = &full_seq[start..end];
@@ -555,7 +569,10 @@ pub fn unitig_sequence(
         match ori {
             '+' => Ok(slice.to_string()),
             '-' => Ok(utils::rev_comp(slice)), // assuming rev_comp takes &str and returns String
-            _ => Err(format!("invalid orientation '{}' in node id '{}'", ori, node_id)),
+            _ => Err(format!(
+                "invalid orientation '{}' in node id '{}'",
+                ori, node_id
+            )),
         }
     };
 

@@ -110,7 +110,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 //heuristic simplification: remove short edges
                 //println!("Applying heuristic simplification: removing short edges...");
-                let n_short = heuristic_simplification::remove_short_edges(&mut graph, config.short_edge_ratio);
+                let n_short = heuristic_simplification::remove_short_edges(
+                    &mut graph,
+                    config.short_edge_ratio,
+                );
                 println!("Removed {} short edges", n_short);
 
                 graph_analysis::check_synchronization(&graph);
@@ -179,7 +182,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // compress into unitigs into output dir
             let out_path = out_dir.join(format!("{}.fa", config.output_prefix));
             let out_str = out_path.to_str().ok_or("invalid output path")?;
-            let mut compressed = compress_graph::compress_unitigs(&graph, &config.reads_fq, out_str);
+            let mut compressed =
+                compress_graph::compress_unitigs(&graph, &config.reads_fq, out_str);
             println!(
                 "Assembly produced {} unitigs (written to {})",
                 compressed.unitigs.len(),

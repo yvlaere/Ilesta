@@ -24,9 +24,14 @@ pub fn remove_short_edges(graph: &mut OverlapGraph, drop_ratio: f64) -> usize {
             let threshold = (max_overlap as f64 * drop_ratio + 0.499) as u32;
 
             // Collect edges that are below the threshold
-            node.edges.iter().filter(|e| e.overlap_len < threshold).map(|e| e.target_id.clone()).collect()
-        }
-        else { continue; };
+            node.edges
+                .iter()
+                .filter(|e| e.overlap_len < threshold)
+                .map(|e| e.target_id.clone())
+                .collect()
+        } else {
+            continue;
+        };
 
         // Remove the short edges
         for target_id in edges_to_remove {
@@ -91,7 +96,9 @@ pub fn remove_multi_edges(graph: &mut OverlapGraph) -> usize {
         }
 
         let mut chosen: Vec<(String, crate::create_overlap_graph::EdgeInfo)> = best_idx
-            .into_iter().map(|(t, i)| (t, edges_snapshot[i].clone())).collect();
+            .into_iter()
+            .map(|(t, i)| (t, edges_snapshot[i].clone()))
+            .collect();
         chosen.sort_by(|a, b| a.0.cmp(&b.0));
         let new_edges: Vec<crate::create_overlap_graph::EdgeInfo> =
             chosen.into_iter().map(|(_t, e)| e).collect();

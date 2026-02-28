@@ -205,8 +205,14 @@ fn classify_alignment(
         // first read to second read overlap (query -> target)
 
         // get nodes & edges (forward orientation)
-        let q_plus = format!("{}:{}-{}+", r.query_name, reads[query_id].coverage_start, reads[query_id].coverage_end);
-        let t_orient = format!("{}:{}-{}{}", r.target_name, reads[target_id].coverage_start, reads[target_id].coverage_end, r.strand);
+        let q_plus = format!(
+            "{}:{}-{}+",
+            r.query_name, reads[query_id].coverage_start, reads[query_id].coverage_end
+        );
+        let t_orient = format!(
+            "{}:{}-{}{}",
+            r.target_name, reads[target_id].coverage_start, reads[target_id].coverage_end, r.strand
+        );
 
         // edge length = b1 - b2 (non-overlapping prefix length)
         let edge1_len_i64 = b1 - b2;
@@ -214,9 +220,18 @@ fn classify_alignment(
 
         // reverse complement counterpart:
         // direction: t_rc -> q_minus
-        let q_minus = format!("{}:{}-{}-", r.query_name, reads[query_id].coverage_start, reads[query_id].coverage_end);
+        let q_minus = format!(
+            "{}:{}-{}-",
+            r.query_name, reads[query_id].coverage_start, reads[query_id].coverage_end
+        );
         let rc_strand = if r.strand == '+' { '-' } else { '+' };
-        let t_rc = format!("{}:{}-{}{}", r.target_name, reads[target_id].coverage_start, reads[target_id].coverage_end, rc_strand);
+        let t_rc = format!(
+            "{}:{}-{}{}",
+            r.target_name,
+            reads[target_id].coverage_start,
+            reads[target_id].coverage_end,
+            rc_strand
+        );
 
         // edge length = (l2 - e2) - (l1 - e1)
         let edge2_len_i64 = (l2 - e2) - (l1 - e1);
@@ -241,17 +256,32 @@ fn classify_alignment(
     } else {
         // second to first overlap (target -> query)
         // direction t -> q
-        let q_plus = format!("{}:{}-{}+", r.query_name, reads[query_id].coverage_start, reads[query_id].coverage_end);
-        let t_orient = format!("{}:{}-{}{}", r.target_name, reads[target_id].coverage_start, reads[target_id].coverage_end, r.strand);
+        let q_plus = format!(
+            "{}:{}-{}+",
+            r.query_name, reads[query_id].coverage_start, reads[query_id].coverage_end
+        );
+        let t_orient = format!(
+            "{}:{}-{}{}",
+            r.target_name, reads[target_id].coverage_start, reads[target_id].coverage_end, r.strand
+        );
 
         let edge1_len_i64 = b2 - b1;
         let edge1_len = edge1_len_i64 as u32;
 
         // reverse complement counterpart:
         // direction q_minus -> t_rc
-        let q_minus = format!("{}:{}-{}-", r.query_name, reads[query_id].coverage_start, reads[query_id].coverage_end);
+        let q_minus = format!(
+            "{}:{}-{}-",
+            r.query_name, reads[query_id].coverage_start, reads[query_id].coverage_end
+        );
         let rc_strand = if r.strand == '+' { '-' } else { '+' };
-        let t_rc = format!("{}:{}-{}{}", r.target_name, reads[target_id].coverage_start, reads[target_id].coverage_end, rc_strand);
+        let t_rc = format!(
+            "{}:{}-{}{}",
+            r.target_name,
+            reads[target_id].coverage_start,
+            reads[target_id].coverage_end,
+            rc_strand
+        );
 
         let edge2_len_i64 = (l1 - e1) - (l2 - e2);
         let edge2_len = edge2_len_i64 as u32;
