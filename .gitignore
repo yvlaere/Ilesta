@@ -1,5 +1,5 @@
 /target
-cargo.lock
+Cargo.lock
 /test_data
 /extra_test
 overlaps.bin
