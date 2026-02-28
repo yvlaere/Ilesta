@@ -179,7 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // compress into unitigs into output dir
             let out_path = out_dir.join(format!("{}.fa", config.output_prefix));
             let out_str = out_path.to_str().ok_or("invalid output path")?;
-            let compressed = compress_graph::compress_unitigs(&graph, &config.reads_fq, out_str);
+            let mut compressed = compress_graph::compress_unitigs(&graph, &config.reads_fq, out_str);
             println!(
                 "Assembly produced {} unitigs (written to {})",
                 compressed.unitigs.len(),
