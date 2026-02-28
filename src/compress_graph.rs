@@ -359,6 +359,9 @@ pub fn compress_unitigs(
     }
 
     // 4) build edges between unitigs based on original overlap graph
+
+    // remove empty unitigs (can happen if there are isolated nodes with no edges)
+    unitigs.retain(|u| !u.members.is_empty());
     let mut unitig_ends: HashMap<usize, (String, String)> = HashMap::new();
     // (start_node_id, end_node_id)
 
