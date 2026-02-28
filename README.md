@@ -64,10 +64,13 @@ This will produce:
 - `out_dir/graph.dot` (overlap graph visualization)
 
 ```bash
+# Long read polishing
+minipolish filtered.fq out_dir/unitigs.gfa > polished.gfa
+
 # visualize the assembly graph
 Bandage image out_dir/unitigs.gfa out_dir/unitigs.png
 ```
-Ilesta sucesfully assembles the whole bacterial chromosome as one unitig. The two large swirls represent the complete bacterial chromosome, both orientations. The smaller unitigs are plasmids. 
+Ilesta sucesfully assembles the whole bacterial chromosome as one unitig. The smaller unitigs are plasmids. 
 ![Bandage visualization](image.png)
 
 ```bash
