@@ -138,13 +138,13 @@ fn classify_alignment(
 
     // define overlap beginning and end based on orientation
     let (b2, e2, l2) = if r.strand == '+' {
-        (target_start, target_end, target_length as i64)
+        (target_start, target_end, target_length)
     } else {
         // reverse complement coordinates on the target
         (
-            target_length as i64 - target_end,
-            target_length as i64 - target_start,
-            target_length as i64,
+            target_length - target_end,
+            target_length - target_start,
+            target_length,
         )
     };
 
@@ -238,7 +238,7 @@ fn classify_alignment(
         let edge2_len = edge2_len_i64 as u32;
 
         // shared stats
-        let _overlap_len = r.alignment_block_length as u32;
+        let _overlap_len = r.alignment_block_length;
         let identity = r.percent_identity() as f64;
 
         // create overlap object and store if the overlap is valid
@@ -247,8 +247,8 @@ fn classify_alignment(
             rc_sink_name: q_minus,
             sink_name: t_orient,
             rc_source_name: t_rc,
-            edge_len: edge1_len as u32,
-            rc_edge_len: edge2_len as u32,
+            edge_len: edge1_len,
+            rc_edge_len: edge2_len,
             overlap_len: overlap_length as u32,
             identity,
         };
@@ -287,7 +287,7 @@ fn classify_alignment(
         let edge2_len = edge2_len_i64 as u32;
 
         // shared stats
-        let _overlap_len = r.alignment_block_length as u32;
+        let _overlap_len = r.alignment_block_length;
         let identity = r.percent_identity() as f64;
 
         // create overlap object and store
@@ -296,8 +296,8 @@ fn classify_alignment(
             rc_source_name: q_minus,
             sink_name: q_plus,
             rc_sink_name: t_rc,
-            edge_len: edge1_len as u32,
-            rc_edge_len: edge2_len as u32,
+            edge_len: edge1_len,
+            rc_edge_len: edge2_len,
             overlap_len: overlap_length as u32,
             identity,
         };
@@ -445,10 +445,10 @@ pub fn run_alignment_filtering(
             }
 
             // update read coverage statistics
-            reads[query_id].per_base_coverage[qstart as usize..qend as usize]
+            reads[query_id].per_base_coverage[qstart..qend]
                 .iter_mut()
                 .for_each(|c| *c += 1);
-            reads[target_id].per_base_coverage[tstart as usize..tend as usize]
+            reads[target_id].per_base_coverage[tstart..tend]
                 .iter_mut()
                 .for_each(|c| *c += 1);
         }
@@ -552,7 +552,7 @@ pub fn run_alignment_filtering(
         .collect();
 
     // filter low coverage reads
-    let threshold = *min_overlap_count as u32;
+    let threshold = *min_overlap_count;
     let low_coverage_reads: Vec<_> = reads
         .iter()
         .enumerate()

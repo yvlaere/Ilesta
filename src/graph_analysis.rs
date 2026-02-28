@@ -180,7 +180,7 @@ pub fn tip_length_distribution(graph: &OverlapGraph, max_walk: usize) -> Vec<usi
     }
 
     let mut lengths: Vec<usize> = Vec::new();
-    for (start, _) in &graph.nodes {
+    for start in graph.nodes.keys() {
         let in_deg = *indegrees.get(start).unwrap_or(&0);
         if in_deg != 0 {
             continue; // not a tip start

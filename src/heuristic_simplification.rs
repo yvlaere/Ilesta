@@ -167,7 +167,7 @@ pub fn cut_biloop(graph: &mut OverlapGraph, max_ext: usize) {
             .filter_map(|(node_id, node)| {
                 node.edges
                     .iter()
-                    .find(|e| &e.target_id == &v)
+                    .find(|e| e.target_id == v)
                     .map(|e| (node_id.clone(), e.overlap_len))
             })
             .collect();
@@ -240,7 +240,7 @@ pub fn cut_internal(graph: &mut OverlapGraph, max_ext: usize) {
     for id in graph.nodes.keys() {
         indegree.insert(id.clone(), 0);
     }
-    for (_id, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         for e in &node.edges {
             *indegree.entry(e.target_id.clone()).or_default() += 1;
         }
@@ -307,7 +307,7 @@ pub fn cut_internal(graph: &mut OverlapGraph, max_ext: usize) {
 
             // delete the internal reads (both orientations)
             for internal in path {
-                if internal.len() < 1 {
+                if internal.is_empty() {
                     continue;
                 }
                 let read = &internal[..internal.len() - 1];

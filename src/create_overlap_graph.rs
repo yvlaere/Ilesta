@@ -228,5 +228,5 @@ pub fn run_create_overlap_graph(
     println!("Graph edges: {}", edge_count);
     println!("Node to edge ratio: {:.4}", node_to_edge_ratio);
     println!("=== OVERLAP GRAPH CREATION FINISHED ===");
-    return Ok(g);
+    Ok(g)
 }

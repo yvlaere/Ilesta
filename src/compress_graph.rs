@@ -76,7 +76,7 @@ impl CompressedGraph {
         // segments
         for u in &self.unitigs {
             let sid = format!("unitig_{}_{}", u.id, u.topology);
-            let seq = u.fasta_seq.as_ref().map(|s| s.as_str()).unwrap_or("*");
+            let seq = u.fasta_seq.as_deref().unwrap_or("*");
             writeln!(file, "S\t{}\t{}", sid, seq)?;
         }
 
@@ -204,7 +204,7 @@ pub fn compress_unitigs(
     for id in graph.nodes.keys() {
         indegree.insert(id.clone(), 0);
     }
-    for (_source_id, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         for e in &node.edges {
             *indegree.entry(e.target_id.clone()).or_default() += 1;
         }
@@ -382,7 +382,7 @@ pub fn compress_unitigs(
         if let Some(&from_uid) = node_to_unitig.get(source_id) {
             let (from_start, from_end) = &unitig_ends[&from_uid];
             let from_is_start = source_id == from_start;
-            let from_is_end = source_id == from_end;
+            let _from_is_end = source_id == from_end;
             let from_orient = if from_is_start { '+' } else { '-' };
 
             for e in &node.edges {
@@ -393,7 +393,7 @@ pub fn compress_unitigs(
 
                     let (to_start, to_end) = &unitig_ends[&to_uid];
                     let to_is_start = e.target_id == *to_start;
-                    let to_is_end = e.target_id == *to_end;
+                    let _to_is_end = e.target_id == *to_end;
                     let to_orient = if to_is_start { '+' } else { '-' };
 
                     let key = (from_uid, to_uid, from_orient, to_orient);
@@ -541,7 +541,7 @@ fn load_fastq_sequences(fastq_path: &str) -> Result<HashMap<String, String>, Str
 /// removing overlaps recorded in UnitigMember.edge.(target, edge_len).
 pub fn unitig_sequence(
     unitig: &Unitig,
-    graph: &OverlapGraph,
+    _graph: &OverlapGraph,
     fastq_seqs: HashMap<String, String>,
 ) -> Result<String, String> {
     if unitig.members.is_empty() {

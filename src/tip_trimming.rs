@@ -36,15 +36,15 @@ fn node_classification(graph: &OverlapGraph, n: &str) -> (NodeType, Option<Strin
     // count incoming edges to n by checking outgoing edges of rc(n)
     let incoming = target_nodes(graph, &utils::rc_node(n));
     let num_in = incoming.len();
-    let outgoing = target_nodes(graph, &n);
+    let outgoing = target_nodes(graph, n);
     let num_out = outgoing.len();
     if num_in == 0 && num_out == 1 {
         return (NodeType::Tip, Some(outgoing[0].clone()));
     }
     if num_in == 1 && num_out == 1 {
-        return (NodeType::Mergeable, Some(outgoing[0].clone()));
+        (NodeType::Mergeable, Some(outgoing[0].clone()))
     } else {
-        return (NodeType::Other, None);
+        (NodeType::Other, None)
     }
 }
 
