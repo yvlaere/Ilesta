@@ -19,7 +19,7 @@ Option 2: Precompiled binaries:
 ```bash
 # Download the binary
 mkdir Ilesta; cd Ilesta
-wget https://github.com/yvlaere/Ilesta/releases/download/v1.0.0/ilesta-linux-x86_64
+wget https://github.com/yvlaere/Ilesta/releases/download/v1.1.0/ilesta-linux-x86_64
 chmod +x ilesta-linux-x86_64
 mv ilesta-linux-x86_64 Ilesta
 
