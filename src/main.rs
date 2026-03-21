@@ -1,3 +1,4 @@
+mod align_reads;
 mod alignment_filtering;
 mod bubble_removal;
 mod cli;
@@ -24,6 +25,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
+        Commands::Align(args) => {
+            let config: crate::configs::AlignReadsConfig = args.into();
+            align_reads::run_minimap2(&config.reads_fq, config.threads, &config.output_paf)?;
+            println!("Alignment complete. Output written to {}", &config.output_paf);
+        }
+        
         Commands::AlignmentFiltering(args) => {
             let config: crate::configs::AlignmentFilteringConfig = args.into();
             // run filtering and serialize overlaps to the configured output
@@ -37,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             out.serialize_overlaps(&config.output_overlaps)?;
             println!("Wrote overlaps to {}", config.output_overlaps);
         }
+
         Commands::Assemble(args) => {
             let config: crate::configs::AssembleConfig = args.into();
 

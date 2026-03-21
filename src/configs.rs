@@ -1,3 +1,9 @@
+pub struct AlignReadsConfig {
+    pub reads_fq: String,
+    pub threads: usize,
+    pub output_paf: String,
+}
+
 pub struct AlignmentFilteringConfig {
     pub input_paf: String,
     pub output_overlaps: String,

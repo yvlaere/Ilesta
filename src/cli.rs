@@ -13,11 +13,39 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    // Align reads using minimap2
+    Align(AlignReadsArgs),
+
     /// Alignment filtering
     AlignmentFiltering(AlignmentFilteringArgs),
 
     /// Full genome assembly pipeline
     Assemble(AssembleArgs),
+}
+
+#[derive(Args)]
+pub struct AlignReadsArgs {
+    /// Input reads in FASTQ format
+    #[arg(short = 'r', long)]
+    pub reads_fq: String,
+
+    /// Number of threads
+    #[arg(short = 't', long, default_value_t = 4)]
+    pub threads: usize,
+
+    /// Output PAF file
+    #[arg(short = 'o', long, default_value = "alignments.paf")]
+    pub output_paf: String,
+}
+
+impl From<&AlignReadsArgs> for crate::configs::AlignReadsConfig {
+    fn from(args: &AlignReadsArgs) -> Self {
+        Self {
+            reads_fq: args.reads_fq.clone(),
+            threads: args.threads,
+            output_paf: args.output_paf.clone(),
+        }
+    }
 }
 
 #[derive(Args)]
