@@ -27,10 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match &cli.command {
         Commands::Align(args) => {
             let config: crate::configs::AlignReadsConfig = args.into();
-            align_reads::run_minimap2(&config.reads_fq, config.threads, &config.output_paf)?;
+            align_reads::align_reads(&config.reads_fq, config.threads, &config.output_paf)?;
             println!("Alignment complete. Output written to {}", &config.output_paf);
         }
-        
+
         Commands::AlignmentFiltering(args) => {
             let config: crate::configs::AlignmentFilteringConfig = args.into();
             // run filtering and serialize overlaps to the configured output
