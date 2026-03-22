@@ -27,15 +27,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match &cli.command {
         Commands::Align(args) => {
             let config: crate::configs::AlignReadsConfig = args.into();
-            align_reads::align_reads(&config.reads_fq, config.threads, &config.output_paf)?;
-            println!("Alignment complete. Output written to {}", &config.output_paf);
+
+            // ensure output directory exists
+            let out_dir = std::path::Path::new(&config.output_dir);
+            std::fs::create_dir_all(out_dir)?;
+
+            // check if the reads file exists
+            let reads_path = std::path::Path::new(&config.reads_fq);
+            if !reads_path.exists() {
+                return Err(format!("Reads file {} does not exist", config.reads_fq).into());
+            }
+
+            let paf_path = out_dir.join(&config.paf);
+            align_reads::align_reads(reads_path, config.threads, &paf_path, out_dir, config.min_read_length, config.min_base_quality)?;
+            println!("Alignment complete. Output written to {}", &config.paf);
         }
 
         Commands::AlignmentFiltering(args) => {
             let config: crate::configs::AlignmentFilteringConfig = args.into();
+
+            let out_dir = std::path::Path::new(&config.output_dir);
+            std::fs::create_dir_all(out_dir)?;
+            let paf_path = out_dir.join(&config.paf);
+
             // run filtering and serialize overlaps to the configured output
             let out = alignment_filtering::run_alignment_filtering(
-                &config.input_paf,
+                &paf_path,
                 &config.min_overlap_length,
                 &config.min_overlap_count,
                 &config.min_percent_identity,
@@ -52,6 +69,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let out_dir = std::path::Path::new(&config.output_dir);
             std::fs::create_dir_all(out_dir)?;
 
+            // check if the reads file exists
+            let reads_path = std::path::Path::new(&config.reads_fq);
+            if !reads_path.exists() {
+                return Err(format!("Reads file {} does not exist", config.reads_fq).into());
+            }
+
+            // read filtering and alignment
+            let paf_path = out_dir.join(&config.paf);
+            align_reads::align_reads(reads_path, config.threads, &paf_path, out_dir, config.min_read_length, config.min_base_quality)?;
+            println!("Alignment complete. Output written to {}", &config.paf);
+
             // Determine the path to overlaps: either use provided overlaps or run alignment filtering
             let overlaps_path_str = if let Some(ref overlaps_file) = config.overlaps {
                 // Use provided overlaps
@@ -59,10 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 overlaps_file.clone()
             } else {
                 // Run alignment filtering
-                let input_paf = config
-                    .input_paf
-                    .as_ref()
-                    .ok_or("Either --input-paf or --overlaps must be provided")?;
+                let input_paf = config.paf;
 
                 // write overlaps into the output directory using the chosen prefix
                 let overlaps_path = out_dir.join(format!("{}.overlaps.bin", config.output_prefix));
@@ -72,7 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .to_string();
 
                 let out = alignment_filtering::run_alignment_filtering(
-                    input_paf,
+                    &paf_path,
                     &config.min_overlap_length,
                     &config.min_overlap_count,
                     &config.min_percent_identity,
