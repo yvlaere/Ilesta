@@ -3,7 +3,7 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "Ilesta",
-    version = "1.1.0",
+    version = "1.2.0",
     about = "De novo genome assembly for long reads using an overlap graph"
 )]
 pub struct Cli {
@@ -13,7 +13,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    // Align reads using minimap2
+    // Filter and align reads using minimap2
     Align(AlignReadsArgs),
 
     /// Alignment filtering
@@ -25,6 +25,11 @@ pub enum Commands {
 
 #[derive(Args)]
 pub struct AlignReadsArgs {
+
+    /// Output directory
+    #[arg(short = 'o', long, default_value = ".")]
+    pub output_dir: String,
+
     /// Input reads in FASTQ format
     #[arg(short = 'r', long)]
     pub reads_fq: String,
@@ -34,25 +39,41 @@ pub struct AlignReadsArgs {
     pub threads: usize,
 
     /// Output PAF file
-    #[arg(short = 'o', long, default_value = "alignments.paf")]
-    pub output_paf: String,
+    #[arg(short = 'a', long, default_value = "alignments.paf")]
+    pub paf: String,
+
+    /// Minimum read length
+    #[arg(long, default_value_t = 1000)]
+    pub min_read_length: u32,
+
+    /// Minimum average quality
+    #[arg(short = 'q', long, default_value_t = 10.0)]
+    pub min_base_quality: f32,
 }
 
 impl From<&AlignReadsArgs> for crate::configs::AlignReadsConfig {
     fn from(args: &AlignReadsArgs) -> Self {
         Self {
+            output_dir: args.output_dir.clone(),
             reads_fq: args.reads_fq.clone(),
             threads: args.threads,
-            output_paf: args.output_paf.clone(),
+            paf: args.paf.clone(),
+            min_read_length: args.min_read_length,
+            min_base_quality: args.min_base_quality,
         }
     }
 }
 
 #[derive(Args)]
 pub struct AlignmentFilteringArgs {
+
+    /// Output directory
+    #[arg(short = 'o', long, default_value = ".")]
+    pub output_dir: String,
+
     /// Input PAF file
     #[arg(short = 'f', long)]
-    pub input_paf: String,
+    pub paf: String,
 
     /// Output overlaps binary file
     #[arg(long, default_value = "overlaps.bin")]
@@ -78,7 +99,8 @@ pub struct AlignmentFilteringArgs {
 impl From<&AlignmentFilteringArgs> for crate::configs::AlignmentFilteringConfig {
     fn from(args: &AlignmentFilteringArgs) -> Self {
         Self {
-            input_paf: args.input_paf.clone(),
+            output_dir: args.output_dir.clone(),
+            paf: args.paf.clone(),
             output_overlaps: args.output_overlaps.clone(),
             min_overlap_length: args.min_overlap_length,
             min_overlap_count: args.min_overlap_count,
@@ -90,10 +112,40 @@ impl From<&AlignmentFilteringArgs> for crate::configs::AlignmentFilteringConfig 
 
 #[derive(Args)]
 pub struct AssembleArgs {
-    // Alignment filtering parameters (optional if --overlaps is provided)
-    /// Input PAF file (optional if --overlaps is provided)
-    #[arg(short = 'f', long)]
-    pub input_paf: Option<String>,
+
+    /// Output parameters
+
+    /// Output prefix
+    #[arg(short = 'p', long, default_value = "unitigs")]
+    pub output_prefix: String,
+
+    /// Output directory
+    #[arg(short = 'o', long, default_value = ".")]
+    pub output_dir: String,
+
+    /// Read filtering and alignment parameters
+
+    /// Input reads in FASTQ format
+    #[arg(short = 'r', long)]
+    pub reads_fq: String,
+
+    /// Number of threads
+    #[arg(short = 't', long, default_value_t = 4)]
+    pub threads: usize,
+
+    /// Output PAF file
+    #[arg(short = 'a', long, default_value = "alignments.paf")]
+    pub paf: String,
+
+    /// Minimum read length
+    #[arg(long, default_value_t = 1000)]
+    pub min_read_length: u32,
+
+    /// Minimum average quality
+    #[arg(short = 'q', long, default_value_t = 10.0)]
+    pub min_base_quality: f32,
+
+    /// Alignment filtering parameters (optional if --overlaps is provided)
 
     /// Minimum overlap length
     #[arg(short = 'l', long, default_value_t = 2000)]
@@ -115,17 +167,7 @@ pub struct AssembleArgs {
     #[arg(long)]
     pub overlaps: Option<String>,
 
-    /// Input reads in FASTQ format
-    #[arg(short = 'r', long)]
-    pub reads_fq: String,
-
-    /// Output prefix
-    #[arg(short = 'p', long, default_value = "unitigs")]
-    pub output_prefix: String,
-
-    /// Output directory
-    #[arg(short = 'o', long, default_value = ".")]
-    pub output_dir: String,
+    /// Assembly parameters
 
     /// Maximum bubble length (used during bubble removal)
     #[arg(long, default_value_t = 100u32)]
@@ -155,15 +197,25 @@ pub struct AssembleArgs {
 impl From<&AssembleArgs> for crate::configs::AssembleConfig {
     fn from(args: &AssembleArgs) -> Self {
         Self {
-            input_paf: args.input_paf.clone(),
+            // output
+            output_prefix: args.output_prefix.clone(),
+            output_dir: args.output_dir.clone(),
+
+            // read filtering and alignment
+            reads_fq: args.reads_fq.clone(),
+            threads: args.threads,
+            paf: args.paf.clone(),
+            min_read_length: args.min_read_length,
+            min_base_quality: args.min_base_quality,
+
+            // alignment filtering
             min_overlap_length: args.min_overlap_length,
             min_overlap_count: args.min_overlap_count,
             min_percent_identity: args.min_percent_identity,
             overhang_ratio: args.overhang_ratio,
             overlaps: args.overlaps.clone(),
-            reads_fq: args.reads_fq.clone(),
-            output_prefix: args.output_prefix.clone(),
-            output_dir: args.output_dir.clone(),
+
+            // assembly parameters
             max_bubble_length: args.max_bubble_length,
             min_support_ratio: args.min_support_ratio,
             max_tip_len: args.max_tip_len,
