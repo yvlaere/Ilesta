@@ -308,7 +308,7 @@ fn classify_alignment(
 
 /// Filter PAF file based on overlap quality criteria
 pub fn run_alignment_filtering(
-    paf_in: &str,
+    paf_in: &std::path::Path,
     min_overlap_length: &u32,
     min_overlap_count: &u32,
     min_percent_identity: &f32,
