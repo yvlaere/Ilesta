@@ -9,11 +9,11 @@ use std::time::Instant;
 #[derive(Clone)]
 struct ReadStats {
     name: String,
-    len: usize,
+    len: u32,
     mean_q: f32,
 }
 
-fn filter_fastq(input_path: &str, output_path: &str, min_len: usize, min_q: f32) -> std::io::Result<Vec<ReadStats>> {
+fn filter_fastq(input_path: &std::path::Path, output_path: &std::path::Path, min_len: u32, min_q: f32) -> std::io::Result<Vec<ReadStats>> {
     
     // time for debugging
     let start_time = Instant::now();
@@ -35,7 +35,6 @@ fn filter_fastq(input_path: &str, output_path: &str, min_len: usize, min_q: f32)
     let mut reader_lines = reader.lines();
 
     let duration = start_time.elapsed();
-    println!("File {} opened and reader initialized in {:?}", input_path, duration);
 
     loop {
         // clear buffers
@@ -56,7 +55,7 @@ fn filter_fastq(input_path: &str, output_path: &str, min_len: usize, min_q: f32)
         let name = if header.starts_with('@') { &header[1..] } else { &header };
 
         // get read length
-        let len = seq.len();
+        let len = seq.len() as u32;
 
         let sum_q: u64 = qual.bytes().map(|b| (b.saturating_sub(33)) as u64).sum();
         let mean_q = sum_q as f32 / len as f32;
@@ -78,15 +77,14 @@ fn filter_fastq(input_path: &str, output_path: &str, min_len: usize, min_q: f32)
 
     writer.flush()?;
     println!(
-        "Processed {} reads in {:?}",
-        results.len(),
-        start_time.elapsed()
+        "Processed {} reads",
+        results.len()
     );
 
     Ok(results)
 }
 
-fn subsample_fastq(input_path: &str, output_path: &str, stats: &Vec<ReadStats>, nr_bases: usize) -> std::io::Result<()> {
+fn subsample_fastq(input_path: &std::path::Path, output_path: &std::path::Path, stats: &Vec<ReadStats>, nr_bases: u32) -> std::io::Result<u32> {
     
     // time for debugging
     let start_time = Instant::now();
@@ -99,6 +97,8 @@ fn subsample_fastq(input_path: &str, output_path: &str, stats: &Vec<ReadStats>, 
 
     for r in sorted_stats {
         if total_len + r.len >= nr_bases {
+            total_len += r.len;
+            selected_reads.insert(r.name);
             break;
         }
         total_len += r.len;
@@ -106,10 +106,9 @@ fn subsample_fastq(input_path: &str, output_path: &str, stats: &Vec<ReadStats>, 
     }
 
     println!(
-        "Selected {} reads with total length {} bases in {:?}",
+        "Selected {} reads with total length {} bases",
         selected_reads.len(),
-        total_len,
-        start_time.elapsed()
+        total_len
     );
 
     let file = File::open(input_path)?;
@@ -124,9 +123,6 @@ fn subsample_fastq(input_path: &str, output_path: &str, stats: &Vec<ReadStats>, 
     let mut qual = String::with_capacity(10_000);
 
     let mut reader_lines = reader.lines();
-
-    let duration = start_time.elapsed();
-    println!("File {} opened and reads identified in {:?}", input_path, duration);
 
     loop {
         header.clear();
@@ -158,31 +154,27 @@ fn subsample_fastq(input_path: &str, output_path: &str, stats: &Vec<ReadStats>, 
     }
 
     writer.flush()?;
-    println!(
-        "Processed reads in {:?}",
-        start_time.elapsed()
-    );
-    Ok(())
+    Ok(total_len)
 }
 
-fn run_minimap2(query: &str, threads: usize, out_path: &str) -> std::io::Result<()> {
+fn run_minimap2(query: &std::path::Path, threads: usize, out_path: &std::path::Path) -> std::io::Result<()> {
 
     // time for debugging
     let start_time = Instant::now();
 
     let mut child = Command::new("minimap2")
-        .args(&["-x", "ava-ont", "-t", &threads.to_string(), query, query, "-o", out_path])
+        .arg("-x").arg("ava-ont").arg("-t").arg(&threads.to_string()).arg(query).arg(query).arg("-o").arg(out_path)
         .spawn()?;
 
     let status = child.wait()?;
     assert!(status.success());
 
-    println!("Minimap2 finished in {:?}", start_time.elapsed());
+    //println!("Minimap2 finished in {:?}", start_time.elapsed());
 
     Ok(())
 }
 
-fn estimate_genome_size(paf_path: &str) -> std::io::Result<usize> {
+fn estimate_genome_size(paf_path: &std::path::Path) -> std::io::Result<u32> {
     let file = File::open(paf_path)?;
     let reader = BufReader::new(file);
 
@@ -214,28 +206,38 @@ fn estimate_genome_size(paf_path: &str) -> std::io::Result<usize> {
     println!("Coverage: {:.2}", coverage);
     println!("Estimated genome size: {:.0}", genome_size);
 
-    Ok(genome_size as usize)
+    Ok(genome_size as u32)
 }
 
-pub fn align_reads(reads_fq: &str, threads: usize, output_paf: &str) -> std::io::Result<()> {
+pub fn align_reads(reads_fq: &std::path::Path, threads: usize, output_paf: &std::path::Path, out_dir: &std::path::Path, min_read_length: u32, min_base_quality: f32) -> std::io::Result<()> {
+    println!("=== READ FILTERING AND ALIGNMENT ===");
+    
     println!("Computing read stats...");
-    let basic_filtering = "temp_filtered.fq";
-    let stats = filter_fastq(reads_fq, basic_filtering, 1000, 10.0)?;
 
-    let subsampled_output = "temp_subsampled.fq";
-    subsample_fastq(basic_filtering, subsampled_output, &stats, 500_000_000)?;
+    // compute read stats and filter reads
+    let basic_filtering = "basic_filtered.fq";
+    let basic_filtering_path = out_dir.join(basic_filtering);
+    let stats = filter_fastq(reads_fq, &basic_filtering_path, min_read_length, min_base_quality)?;
 
+    // subsample reads for genome size estimation
+    let subsampled = "subsampled.fq";
+    let subsampled_path = out_dir.join(subsampled);
+    let subsampled_bases = subsample_fastq(&basic_filtering_path, &subsampled_path, &stats, 500_000_000)?;
+
+    // align reads for genome size estimation
     println!("Running minimap2...");
-    run_minimap2(subsampled_output, threads, output_paf)?;
-    println!("Minimap2 finished. Alignments written to {}", output_paf);
+    run_minimap2(&subsampled_path, threads, output_paf)?;
+    println!("Genome size estimation alignment finished. Alignments written to {}", output_paf.display());
 
+    // estimate genome size
     let genome_size = estimate_genome_size(output_paf)?;
 
-    // second round of subsampling based on the estimated genome size
-    let subsampled_output_2 = "temp_subsampled_2.fq";
-    subsample_fastq(reads_fq, subsampled_output_2, &stats, genome_size * 50)?;
-    run_minimap2(subsampled_output_2, threads, output_paf)?;
-    println!("Second round of minimap2 finished. Alignments written to {}", output_paf);
+    // final round of subsampling based on the estimated genome size
+    let subsampled_output = "filtered.fq";
+    let subsampled_output_path = out_dir.join(subsampled_output);
+    subsample_fastq(reads_fq, &subsampled_output_path, &stats, genome_size * 50)?;
+    run_minimap2(&subsampled_output_path, threads, output_paf)?;
+    println!("Final alignment finished. Alignments written to {}", output_paf.display());
 
     Ok(())
 }
