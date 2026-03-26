@@ -73,10 +73,9 @@ pub fn reduce_transitive_edges(g: &mut OverlapGraph, fuzz: u32) {
                     let len_n2n3 = e_n3.edge_len;
                     // if path length n1->n2->n3 <= longest then candidate for elimination
                     let path_len = len_n2n3 as u64 + len_n1n2 as u64;
-                    if path_len <= longest
-                        && mark.get(n3).copied() == Some(Mark::InPlay) {
-                            mark.insert(n3.clone(), Mark::Eliminated);
-                        }
+                    if path_len <= longest && mark.get(n3).copied() == Some(Mark::InPlay) {
+                        mark.insert(n3.clone(), Mark::Eliminated);
+                    }
                 }
             }
         }

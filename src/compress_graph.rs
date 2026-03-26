@@ -507,12 +507,20 @@ pub fn compress_unitigs(
     CompressedGraph { unitigs, edges }
 }
 
-fn load_fastq_sequences(fastq_path: &std::path::PathBuf) -> Result<HashMap<String, String>, String> {
+fn load_fastq_sequences(
+    fastq_path: &std::path::PathBuf,
+) -> Result<HashMap<String, String>, String> {
     let mut seq_map: HashMap<String, String> = HashMap::new();
 
     let reader = match std::fs::File::open(fastq_path) {
         Ok(f) => f,
-        Err(e) => return Err(format!("failed to open FASTQ file '{}': {}", fastq_path.display(), e)),
+        Err(e) => {
+            return Err(format!(
+                "failed to open FASTQ file '{}': {}",
+                fastq_path.display(),
+                e
+            ));
+        }
     };
     let buf_reader = std::io::BufReader::new(reader);
     let mut lines = buf_reader.lines();

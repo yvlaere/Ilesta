@@ -39,7 +39,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let paf_path = out_dir.join(&config.paf);
-            let subsampled_path = align_reads::align_reads(reads_path, config.threads, &paf_path, out_dir, config.min_read_length, config.min_base_quality, config.genome_size)?;
+            let subsampled_path = align_reads::align_reads(
+                reads_path,
+                config.threads,
+                &paf_path,
+                out_dir,
+                config.min_read_length,
+                config.min_base_quality,
+                config.genome_size,
+            )?;
         }
 
         Commands::AlignmentFiltering(args) => {
@@ -77,7 +85,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // read filtering and alignment
             let paf_path = out_dir.join(&config.paf);
             println!("=== READ FILTERING AND ALIGNMENT ===");
-            let subsampled_path = align_reads::align_reads(reads_path, config.threads, &paf_path, out_dir, config.min_read_length, config.min_base_quality, config.genome_size)?;
+            let subsampled_path = align_reads::align_reads(
+                reads_path,
+                config.threads,
+                &paf_path,
+                out_dir,
+                config.min_read_length,
+                config.min_base_quality,
+                config.genome_size,
+            )?;
             println!("=== READ FILTERING AND ALIGNMENT COMPLETE ===");
 
             // Determine the path to overlaps: either use provided overlaps or run alignment filtering

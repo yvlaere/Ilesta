@@ -25,7 +25,6 @@ pub enum Commands {
 
 #[derive(Args)]
 pub struct AlignReadsArgs {
-
     /// Output directory
     #[arg(short = 'o', long, default_value = ".")]
     pub output_dir: String,
@@ -71,7 +70,6 @@ impl From<&AlignReadsArgs> for crate::configs::AlignReadsConfig {
 
 #[derive(Args)]
 pub struct AlignmentFilteringArgs {
-
     /// Output directory
     #[arg(short = 'o', long, default_value = ".")]
     pub output_dir: String,
@@ -117,7 +115,6 @@ impl From<&AlignmentFilteringArgs> for crate::configs::AlignmentFilteringConfig 
 
 #[derive(Args)]
 pub struct AssembleArgs {
-
     /// Output parameters
 
     /// Output prefix

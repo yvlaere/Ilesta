@@ -40,7 +40,7 @@ pub struct AssembleConfig {
     pub min_percent_identity: f32,
     pub overhang_ratio: f32,
     pub overlaps: Option<String>,
-    
+
     // assembly parameters
     pub max_bubble_length: u32,
     pub min_support_ratio: f64,
