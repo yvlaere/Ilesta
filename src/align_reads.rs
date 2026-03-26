@@ -321,6 +321,9 @@ pub fn align_reads(
                 previous_subsampled_bases = subsampled_bases;
                 subsampling_rounds += 1;
             }
+
+            // remove intermediate files
+            std::fs::remove_file(subsampled_path)?;
         }
     }
 
@@ -333,6 +336,9 @@ pub fn align_reads(
         "Final alignment finished. Alignments written to {}",
         output_paf.display()
     );
+
+    // remove intermediate files
+    std::fs::remove_file(basic_filtering_path)?;
 
     let path = std::path::PathBuf::from(subsampled_output_path);
 
