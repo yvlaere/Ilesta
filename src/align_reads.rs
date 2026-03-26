@@ -15,9 +15,6 @@ struct ReadStats {
 
 fn filter_fastq(input_path: &std::path::Path, output_path: &std::path::Path, min_len: u32, min_q: f32) -> std::io::Result<Vec<ReadStats>> {
     
-    // time for debugging
-    let start_time = Instant::now();
-
     // read the file
     let file = File::open(input_path)?;
     let reader = BufReader::new(file);
@@ -33,8 +30,6 @@ fn filter_fastq(input_path: &std::path::Path, output_path: &std::path::Path, min
 
     let mut results = Vec::new();
     let mut reader_lines = reader.lines();
-
-    let duration = start_time.elapsed();
 
     loop {
         // clear buffers
@@ -174,7 +169,7 @@ fn run_minimap2(query: &std::path::Path, threads: usize, out_path: &std::path::P
     Ok(())
 }
 
-fn estimate_genome_size(paf_path: &std::path::Path) -> std::io::Result<u32> {
+fn estimate_genome_size(paf_path: &std::path::Path) -> std::io::Result<(f64, u32)> {
     let file = File::open(paf_path)?;
     let reader = BufReader::new(file);
 
@@ -206,11 +201,10 @@ fn estimate_genome_size(paf_path: &std::path::Path) -> std::io::Result<u32> {
     println!("Coverage: {:.2}", coverage);
     println!("Estimated genome size: {:.0}", genome_size);
 
-    Ok(genome_size as u32)
+    Ok((coverage as f64, genome_size as u32))
 }
 
-pub fn align_reads(reads_fq: &std::path::Path, threads: usize, output_paf: &std::path::Path, out_dir: &std::path::Path, min_read_length: u32, min_base_quality: f32) -> std::io::Result<()> {
-    println!("=== READ FILTERING AND ALIGNMENT ===");
+pub fn align_reads(reads_fq: &std::path::Path, threads: usize, output_paf: &std::path::Path, out_dir: &std::path::Path, min_read_length: u32, min_base_quality: f32, input_genome_size: Option<u32>) -> std::io::Result<std::path::PathBuf> {
     
     println!("Computing read stats...");
 
@@ -219,19 +213,58 @@ pub fn align_reads(reads_fq: &std::path::Path, threads: usize, output_paf: &std:
     let basic_filtering_path = out_dir.join(basic_filtering);
     let stats = filter_fastq(reads_fq, &basic_filtering_path, min_read_length, min_base_quality)?;
 
-    // subsample reads for genome size estimation
-    let subsampled = "subsampled.fq";
-    let subsampled_path = out_dir.join(subsampled);
-    let subsampled_bases = subsample_fastq(&basic_filtering_path, &subsampled_path, &stats, 500_000_000)?;
+    let mut genome_size = 0;
 
-    // align reads for genome size estimation
-    println!("Running minimap2...");
-    run_minimap2(&subsampled_path, threads, output_paf)?;
-    println!("Genome size estimation alignment finished. Alignments written to {}", output_paf.display());
+    match input_genome_size {
+        Some(size) => {
+            println!("Using provided genome size: {} bases", size);
+            genome_size = size;
+        },
+        None => {
+            println!("No genome size provided, will estimate from data");
+            // subsample reads for genome size estimation
+            let subsampled = "subsampled.fq";
+            let subsampled_path = out_dir.join(subsampled);
+            let subsampled_bases = subsample_fastq(&basic_filtering_path, &subsampled_path, &stats, 500_000_000)?;
 
-    // estimate genome size
-    let genome_size = estimate_genome_size(output_paf)?;
+            // align reads for genome size estimation
+            println!("Running minimap2...");
+            run_minimap2(&subsampled_path, threads, output_paf)?;
+            println!("Genome size estimation alignment finished. Alignments written to {}", output_paf.display());
 
+            // estimate genome size
+            let mut coverage = 0 as f64;
+            (coverage, genome_size) = estimate_genome_size(output_paf)?;
+
+            let mut subsampling_rounds = 1;
+            let mut previous_subsampled_bases = 0;
+
+            while coverage < 10.0 {
+                // subsample reads for genome size estimation
+                let subsampled = "subsampled.fq";
+                let subsampled_path = out_dir.join(subsampled);
+                let subsampled_bases = subsample_fastq(&basic_filtering_path, &subsampled_path, &stats, subsampling_rounds * 500_000_000)?;
+
+                if subsampled_bases == previous_subsampled_bases {
+                    // coverage too low, throw an error
+                    eprintln!("Coverage is too low. Stopping.");
+                    break;
+                }
+
+                // align reads for genome size estimation
+                println!("Running minimap2...");
+                run_minimap2(&subsampled_path, threads, output_paf)?;
+                println!("Genome size estimation alignment finished. Alignments written to {}", output_paf.display());
+
+                // estimate genome size
+                (coverage, genome_size) = estimate_genome_size(output_paf)?;
+
+                previous_subsampled_bases = subsampled_bases;
+                subsampling_rounds += 1;
+            }
+        }
+    }
+    
     // final round of subsampling based on the estimated genome size
     let subsampled_output = "filtered.fq";
     let subsampled_output_path = out_dir.join(subsampled_output);
@@ -239,5 +272,7 @@ pub fn align_reads(reads_fq: &std::path::Path, threads: usize, output_paf: &std:
     run_minimap2(&subsampled_output_path, threads, output_paf)?;
     println!("Final alignment finished. Alignments written to {}", output_paf.display());
 
-    Ok(())
+    let path = std::path::PathBuf::from(subsampled_output_path);
+
+    Ok(path)
 }

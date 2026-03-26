@@ -39,8 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let paf_path = out_dir.join(&config.paf);
-            align_reads::align_reads(reads_path, config.threads, &paf_path, out_dir, config.min_read_length, config.min_base_quality)?;
-            println!("Alignment complete. Output written to {}", &config.paf);
+            let subsampled_path = align_reads::align_reads(reads_path, config.threads, &paf_path, out_dir, config.min_read_length, config.min_base_quality, config.genome_size)?;
         }
 
         Commands::AlignmentFiltering(args) => {
@@ -77,8 +76,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // read filtering and alignment
             let paf_path = out_dir.join(&config.paf);
-            align_reads::align_reads(reads_path, config.threads, &paf_path, out_dir, config.min_read_length, config.min_base_quality)?;
-            println!("Alignment complete. Output written to {}", &config.paf);
+            println!("=== READ FILTERING AND ALIGNMENT ===");
+            let subsampled_path = align_reads::align_reads(reads_path, config.threads, &paf_path, out_dir, config.min_read_length, config.min_base_quality, config.genome_size)?;
+            println!("=== READ FILTERING AND ALIGNMENT COMPLETE ===");
 
             // Determine the path to overlaps: either use provided overlaps or run alignment filtering
             let overlaps_path_str = if let Some(ref overlaps_file) = config.overlaps {
@@ -214,13 +214,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("\n=== COMPRESSING UNITIGS AND WRITING OUTPUT ===");
             // compress into unitigs into output dir
             let out_path = out_dir.join(format!("{}.fa", config.output_prefix));
-            let out_str = out_path.to_str().ok_or("invalid output path")?;
             let mut compressed =
-                compress_graph::compress_unitigs(&graph, &config.reads_fq, out_str);
+                compress_graph::compress_unitigs(&graph, &subsampled_path, &out_path);
             println!(
                 "Assembly produced {} unitigs (written to {})",
                 compressed.unitigs.len(),
-                out_str
+                out_path.display()
             );
             let gfa_path = out_dir.join(format!("{}.gfa", config.output_prefix));
             let gfa_str = gfa_path.to_str().ok_or("invalid output path")?;
