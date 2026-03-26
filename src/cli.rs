@@ -49,6 +49,10 @@ pub struct AlignReadsArgs {
     /// Minimum average quality
     #[arg(short = 'q', long, default_value_t = 10.0)]
     pub min_base_quality: f32,
+
+    /// Optional input genome size (if not provided, will be estimated from data)
+    #[arg(long)]
+    pub input_genome_size: Option<u32>,
 }
 
 impl From<&AlignReadsArgs> for crate::configs::AlignReadsConfig {
@@ -60,6 +64,7 @@ impl From<&AlignReadsArgs> for crate::configs::AlignReadsConfig {
             paf: args.paf.clone(),
             min_read_length: args.min_read_length,
             min_base_quality: args.min_base_quality,
+            input_genome_size: args.input_genome_size,
         }
     }
 }
@@ -145,6 +150,10 @@ pub struct AssembleArgs {
     #[arg(short = 'q', long, default_value_t = 10.0)]
     pub min_base_quality: f32,
 
+    /// Optional input genome size (if not provided, will be estimated from data)
+    #[arg(long)]
+    pub input_genome_size: Option<u32>,
+
     /// Alignment filtering parameters (optional if --overlaps is provided)
 
     /// Minimum overlap length
@@ -207,6 +216,7 @@ impl From<&AssembleArgs> for crate::configs::AssembleConfig {
             paf: args.paf.clone(),
             min_read_length: args.min_read_length,
             min_base_quality: args.min_base_quality,
+            input_genome_size: args.input_genome_size,
 
             // alignment filtering
             min_overlap_length: args.min_overlap_length,

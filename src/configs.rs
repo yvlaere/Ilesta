@@ -8,6 +8,7 @@ pub struct AlignReadsConfig {
     pub paf: String,
     pub min_read_length: u32,
     pub min_base_quality: f32,
+    pub input_genome_size: Option<u32>,
 }
 
 pub struct AlignmentFilteringConfig {
@@ -31,6 +32,7 @@ pub struct AssembleConfig {
     pub paf: String,
     pub min_read_length: u32,
     pub min_base_quality: f32,
+    pub input_genome_size: Option<u32>,
 
     // alignment filtering
     pub min_overlap_length: u32,
