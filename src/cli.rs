@@ -3,7 +3,7 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "Ilesta",
-    version = "1.2.0",
+    version = "1.2.1",
     about = "De novo genome assembly for long reads using an overlap graph"
 )]
 pub struct Cli {
@@ -13,7 +13,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    // Filter and align reads using minimap2
+    /// Read filtering and alignment
     Align(AlignReadsArgs),
 
     /// Alignment filtering
@@ -118,85 +118,85 @@ pub struct AssembleArgs {
     /// Output parameters
 
     /// Output prefix
-    #[arg(short = 'p', long, default_value = "unitigs")]
+    #[arg(short = 'p', long, default_value = "unitigs", help_heading = "Output")]
     pub output_prefix: String,
 
     /// Output directory
-    #[arg(short = 'o', long, default_value = ".")]
+    #[arg(short = 'o', long, default_value = ".", help_heading = "Output")]
     pub output_dir: String,
 
     /// Read filtering and alignment parameters
 
     /// Input reads in FASTQ format
-    #[arg(short = 'r', long)]
+    #[arg(short = 'r', long, help_heading = "Read filtering and alignment")]
     pub reads_fq: String,
 
     /// Number of threads
-    #[arg(short = 't', long, default_value_t = 4)]
+    #[arg(short = 't', long, default_value_t = 4, help_heading = "Read filtering and alignment")]
     pub threads: usize,
 
-    /// Output PAF file
-    #[arg(short = 'a', long, default_value = "alignments.paf")]
+    /// Output PAF filename
+    #[arg(short = 'a', long, default_value = "alignments.paf", help_heading = "Read filtering and alignment")]
     pub paf: String,
 
     /// Minimum read length
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = 1000, help_heading = "Read filtering and alignment")]
     pub min_read_length: u32,
 
     /// Minimum average quality
-    #[arg(short = 'q', long, default_value_t = 10.0)]
+    #[arg(short = 'q', long, default_value_t = 10.0, help_heading = "Read filtering and alignment")]
     pub min_base_quality: f32,
 
     /// Optional input genome size (if not provided, will be estimated from data)
-    #[arg(long)]
+    #[arg(long, help_heading = "Read filtering and alignment")]
     pub genome_size: Option<u32>,
 
     /// Alignment filtering parameters (optional if --overlaps is provided)
 
     /// Minimum overlap length
-    #[arg(short = 'l', long, default_value_t = 2000)]
+    #[arg(short = 'l', long, default_value_t = 2000, help_heading = "Alignment filtering")]
     pub min_overlap_length: u32,
 
     /// Minimum overlap count
-    #[arg(short = 'c', long, default_value_t = 3)]
+    #[arg(short = 'c', long, default_value_t = 3, help_heading = "Alignment filtering")]
     pub min_overlap_count: u32,
 
     /// Minimum percent identity
-    #[arg(short = 'i', long, default_value_t = 5.0)]
+    #[arg(short = 'i', long, default_value_t = 5.0, help_heading = "Alignment filtering")]
     pub min_percent_identity: f32,
 
     /// Overhang ratio
-    #[arg(long, default_value_t = 0.8)]
+    #[arg(long, default_value_t = 0.8, help_heading = "Alignment filtering")]
     pub overhang_ratio: f32,
 
     /// Pre-computed overlaps binary file (optional, if provided skips alignment filtering)
-    #[arg(long)]
+    #[arg(long, help_heading = "Alignment filtering")]
     pub overlaps: Option<String>,
 
     /// Assembly parameters
 
     /// Maximum bubble length (used during bubble removal)
-    #[arg(long, default_value_t = 100u32)]
+    #[arg(long, default_value_t = 100u32, help_heading = "Assembly")]
     pub max_bubble_length: u32,
 
     /// Minimum support ratio for bubble removal
-    #[arg(long, default_value_t = 1.1f64)]
+    #[arg(long, default_value_t = 1.1f64, help_heading = "Assembly")]
     pub min_support_ratio: f64,
 
     /// Maximum tip length for tip trimming
-    #[arg(long, default_value_t = 4u32)]
+    #[arg(long, default_value_t = 4u32, help_heading = "Assembly")]
     pub max_tip_len: u32,
 
     /// Fuzz parameter for transitive edge reduction
-    #[arg(long, default_value_t = 10u32)]
+    #[arg(long, default_value_t = 10u32, help_heading = "Assembly")]
     pub fuzz: u32,
 
     /// Number of cleanup iterations to run
-    #[arg(long, default_value_t = 3u32)]
+    #[arg(long, default_value_t = 3u32, help_heading = "Assembly")]
     pub cleanup_iterations: u32,
 
     /// Short edge removal ratio (heuristic simplification)
-    #[arg(long, default_value_t = 0.8f64)]
+    #[arg(long, default_value_t = 0.8f64, help_heading = "Assembly")]
     pub short_edge_ratio: f64,
 }
 

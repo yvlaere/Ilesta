@@ -86,7 +86,7 @@ Ilesta --help
 Usage: Ilesta <COMMAND>
 
 Commands:
-  align                
+  align                Read filtering and alignment
   alignment-filtering  Alignment filtering
   assemble             Full genome assembly pipeline
   help                 Print this message or the help of the given subcommand(s)
@@ -101,22 +101,27 @@ Ilesta assemble --help
 Usage: Ilesta assemble [OPTIONS] --reads-fq <READS_FQ>
 
 Options:
-  -p, --output-prefix <OUTPUT_PREFIX>
-          Output parameters Output prefix [default: unitigs]
-  -o, --output-dir <OUTPUT_DIR>
-          Output directory [default: .]
+  -h, --help  Print help
+
+Output:
+  -p, --output-prefix <OUTPUT_PREFIX>  Output parameters Output prefix [default: unitigs]
+  -o, --output-dir <OUTPUT_DIR>        Output directory [default: .]
+
+Read filtering and alignment:
   -r, --reads-fq <READS_FQ>
           Read filtering and alignment parameters Input reads in FASTQ format
   -t, --threads <THREADS>
           Number of threads [default: 4]
   -a, --paf <PAF>
-          Output PAF file [default: alignments.paf]
+          Output PAF filename [default: alignments.paf]
       --min-read-length <MIN_READ_LENGTH>
           Minimum read length [default: 1000]
   -q, --min-base-quality <MIN_BASE_QUALITY>
           Minimum average quality [default: 10]
       --genome-size <GENOME_SIZE>
           Optional input genome size (if not provided, will be estimated from data)
+
+Alignment filtering:
   -l, --min-overlap-length <MIN_OVERLAP_LENGTH>
           Alignment filtering parameters (optional if --overlaps is provided) Minimum overlap length [default: 2000]
   -c, --min-overlap-count <MIN_OVERLAP_COUNT>
@@ -127,6 +132,8 @@ Options:
           Overhang ratio [default: 0.8]
       --overlaps <OVERLAPS>
           Pre-computed overlaps binary file (optional, if provided skips alignment filtering)
+
+Assembly:
       --max-bubble-length <MAX_BUBBLE_LENGTH>
           Assembly parameters Maximum bubble length (used during bubble removal) [default: 100]
       --min-support-ratio <MIN_SUPPORT_RATIO>
@@ -139,8 +146,6 @@ Options:
           Number of cleanup iterations to run [default: 3]
       --short-edge-ratio <SHORT_EDGE_RATIO>
           Short edge removal ratio (heuristic simplification) [default: 0.8]
-  -h, --help
-          Print help
 ```
 
 ## Development
