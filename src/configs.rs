@@ -48,4 +48,8 @@ pub struct AssembleConfig {
     pub fuzz: u32,
     pub cleanup_iterations: u32,
     pub short_edge_ratio: f64,
+    pub completion_enabled: bool,
+    pub completion_rounds: u32,
+    pub completion_min_alignment_len: u32,
+    pub completion_min_identity: f64,
 }

@@ -198,6 +198,22 @@ pub struct AssembleArgs {
     /// Short edge removal ratio (heuristic simplification)
     #[arg(long, default_value_t = 0.8f64, help_heading = "Assembly")]
     pub short_edge_ratio: f64,
+
+    /// Enable a second read-guided completion stage after the first assembly pass
+    #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue, help_heading = "Assembly")]
+    pub completion_enabled: bool,
+
+    /// Number of completion rounds to run
+    #[arg(long, default_value_t = 1u32, help_heading = "Assembly")]
+    pub completion_rounds: u32,
+
+    /// Minimum alignment length for a completion bridge
+    #[arg(long, default_value_t = 2000u32, help_heading = "Assembly")]
+    pub completion_min_alignment_len: u32,
+
+    /// Minimum identity for a completion bridge
+    #[arg(long, default_value_t = 0.8f64, help_heading = "Assembly")]
+    pub completion_min_identity: f64,
 }
 
 impl From<&AssembleArgs> for crate::configs::AssembleConfig {
@@ -229,6 +245,10 @@ impl From<&AssembleArgs> for crate::configs::AssembleConfig {
             fuzz: args.fuzz,
             cleanup_iterations: args.cleanup_iterations,
             short_edge_ratio: args.short_edge_ratio,
+            completion_enabled: args.completion_enabled,
+            completion_rounds: args.completion_rounds,
+            completion_min_alignment_len: args.completion_min_alignment_len,
+            completion_min_identity: args.completion_min_identity,
         }
     }
 }

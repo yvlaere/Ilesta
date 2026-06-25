@@ -73,21 +73,21 @@ pub struct OverlapGraph {
 
 impl OverlapGraph {
     /// Create a new empty overlap graph
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             nodes: HashMap::new(),
         }
     }
 
     /// Add a node to the graph if it does not already exist, if it already exists do nothing
-    fn add_node(&mut self, node_id: String) {
+    pub fn add_node(&mut self, node_id: String) {
         self.nodes
             .entry(node_id.clone())
             .or_insert_with(|| Node::new(node_id));
     }
 
     /// Add a directed edge from from_id to to_id with given edge length and metrics
-    fn add_edge(
+    pub fn add_edge(
         &mut self,
         from_id: &str,
         to_id: &str,
@@ -100,6 +100,25 @@ impl OverlapGraph {
             panic!("add_edge: nodes must exist before adding edge");
         }
         if let Some(node) = self.nodes.get_mut(from_id) {
+            node.add_edge(to_id, edge_len, overlap_len, identity);
+        }
+    }
+
+    /// Add a bridge edge between two oriented nodes when read support indicates a likely connection.
+    pub fn add_bridge_edge(
+        &mut self,
+        from_id: &str,
+        to_id: &str,
+        edge_len: u32,
+        overlap_len: u32,
+        identity: f64,
+    ) {
+        self.add_node(from_id.to_string());
+        self.add_node(to_id.to_string());
+        if let Some(node) = self.nodes.get_mut(from_id) {
+            if node.edges.iter().any(|e| e.target_id == to_id) {
+                return;
+            }
             node.add_edge(to_id, edge_len, overlap_len, identity);
         }
     }

@@ -7,6 +7,7 @@ mod configs;
 mod create_overlap_graph;
 mod graph_analysis;
 mod heuristic_simplification;
+mod iterative_completion;
 mod tip_trimming;
 mod transitive_edge_reduction;
 mod utils;
@@ -218,6 +219,65 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Final graph has {} edges",
                 graph.nodes.values().map(|n| n.edges.len()).sum::<usize>()
             );
+
+            if config.completion_enabled {
+                println!("\n=== STARTING READ-GUIDED COMPLETION ===");
+                for round in 1..=config.completion_rounds {
+                    println!("\n--- Completion round {} ---", round);
+                    let first_pass_unitigs_path = out_dir.join(format!("{}.first_pass.fa", config.output_prefix));
+                    let initial_compressed = compress_graph::compress_unitigs(
+                        &graph,
+                        &subsampled_path,
+                        &first_pass_unitigs_path,
+                    );
+                    let _ = initial_compressed;
+                    let completion_paf = out_dir.join(format!("{}.completion.paf", config.output_prefix));
+                    let completion = iterative_completion::run_completion_round(
+                        &graph,
+                        &subsampled_path,
+                        &first_pass_unitigs_path,
+                        &completion_paf,
+                        config.completion_min_alignment_len,
+                        config.completion_min_identity,
+                        config.threads,
+                    )?;
+                    if completion.is_empty() {
+                        println!("No completion bridges were added.");
+                        break;
+                    }
+                    println!("Added {} completion bridges", completion.len());
+                    for bridge in completion {
+                        graph.add_bridge_edge(
+                            &bridge.from_node,
+                            &bridge.to_node,
+                            bridge.edge_len,
+                            bridge.overlap_len,
+                            bridge.identity,
+                        );
+                    }
+
+                    for iteration in 1..=config.cleanup_iterations {
+                        println!("  Cleanup iteration {}", iteration);
+                        let edges_before: usize = graph.nodes.values().map(|n| n.edges.len()).sum();
+                        transitive_edge_reduction::reduce_transitive_edges(&mut graph, fuzz);
+                        let edges_after: usize = graph.nodes.values().map(|n| n.edges.len()).sum();
+                        println!(
+                            "  Removed {} edges with transitive edge reduction",
+                            edges_before.saturating_sub(edges_after)
+                        );
+                        let n_multi = heuristic_simplification::remove_multi_edges(&mut graph);
+                        println!("  Removed {} multi-edges", n_multi);
+                        let n_short = heuristic_simplification::remove_short_edges(
+                            &mut graph,
+                            config.short_edge_ratio,
+                        );
+                        println!("  Removed {} short edges", n_short);
+                        bubble_removal::remove_bubbles(&mut graph, max_bubble_len, min_support_ratio);
+                        tip_trimming::trim_tips(&mut graph, max_tip_len);
+                    }
+                }
+                println!("\n=== READ-GUIDED COMPLETION COMPLETE ===");
+            }
 
             println!("\n=== PLOTTING OVERLAP GRAPH ===");
             // write graph snapshot into output dir
