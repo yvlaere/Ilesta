@@ -93,12 +93,11 @@ fn parse_paf_bridges(
             .push((tname.to_string(), alignment_len, identity));
     }
 
-    let mut bridges = Vec::new();
-    let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
+    let mut bridge_support: HashMap<(String, String), BridgeSupport> = HashMap::new();
 
-    for (query, targets) in alignments_by_query {
-        let _ = query;
-        let mut related_targets = Vec::new();
+    for targets in alignments_by_query.into_values() {
+        let mut pairs = Vec::new();
+        let mut seen_pairs_for_query: HashSet<(String, String)> = HashSet::new();
         for (target, alignment_len, identity) in &targets {
             for (other_target, other_len, other_identity) in &targets {
                 if other_target == target {
@@ -108,24 +107,41 @@ fn parse_paf_bridges(
                 if pair.0 > pair.1 {
                     std::mem::swap(&mut pair.0, &mut pair.1);
                 }
-                if seen_pairs.insert(pair) {
-                    related_targets.push((target.clone(), other_target.clone(), *alignment_len, *other_len, *identity, *other_identity));
+                if seen_pairs_for_query.insert(pair.clone()) {
+                    pairs.push((pair, *alignment_len, *other_len, *identity, *other_identity));
                 }
             }
         }
 
-        for (from_node, to_node, from_len, to_len, from_id, to_id) in related_targets {
-            bridges.push(BridgeSupport {
+        for ((from_node, to_node), from_len, to_len, from_id, to_id) in pairs {
+            let entry = bridge_support.entry((from_node.clone(), to_node.clone())).or_insert(BridgeSupport {
                 from_node: from_node.clone(),
                 to_node: to_node.clone(),
-                support_reads: 1,
-                edge_len: from_len.min(to_len),
-                overlap_len: from_len.min(to_len),
-                identity: (from_id + to_id) / 2.0,
+                support_reads: 0,
+                edge_len: 0,
+                overlap_len: 0,
+                identity: 0.0,
             });
+            entry.support_reads += 1;
+            let candidate_len = from_len.min(to_len);
+            entry.edge_len = entry.edge_len.max(candidate_len);
+            entry.overlap_len = entry.overlap_len.max(candidate_len);
+            entry.identity = entry.identity.max((from_id + to_id) / 2.0);
         }
     }
 
+    let mut bridges = Vec::new();
+    for support in bridge_support.into_values() {
+        let strong_support = support.support_reads >= 2
+            || support.edge_len >= min_alignment_len.saturating_mul(2)
+            || (support.edge_len >= min_alignment_len && support.identity >= min_identity + 0.05);
+
+        if strong_support {
+            bridges.push(support);
+        }
+    }
+
+    bridges.sort_by(|a, b| b.support_reads.cmp(&a.support_reads).then_with(|| b.edge_len.cmp(&a.edge_len)));
     Ok(bridges)
 }
 
@@ -191,6 +207,30 @@ mod tests {
                 identity: 0.8708333333333333,
             }
         );
+
+        let _ = fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn aggregates_multiple_supporting_reads_for_the_same_bridge() {
+        let mut tmp = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        tmp.push("target");
+        tmp.push("tmp_completion_test_aggregated.paf");
+        let paf = concat!(
+            "read1\t1000\t0\t800\t+\tunitig_0\t1200\t0\t800\t700\t800\t60\n",
+            "read1\t1000\t0\t750\t+\tunitig_1\t1100\t0\t750\t650\t750\t60\n",
+            "read2\t1000\t0\t900\t+\tunitig_0\t1200\t0\t900\t800\t900\t60\n",
+            "read2\t1000\t0\t850\t+\tunitig_1\t1100\t0\t850\t750\t850\t60\n"
+        );
+        fs::write(&tmp, paf).unwrap();
+
+        let bridges = parse_paf_bridges(&tmp, 500, 0.8).unwrap();
+
+        assert_eq!(bridges.len(), 1);
+        assert_eq!(bridges[0].support_reads, 2);
+        assert_eq!(bridges[0].from_node, "unitig_0");
+        assert_eq!(bridges[0].to_node, "unitig_1");
+        assert_eq!(bridges[0].edge_len, 850);
 
         let _ = fs::remove_file(tmp);
     }
