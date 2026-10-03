@@ -1,8 +1,9 @@
 /target
-Cargo.lock
 /evaluation/test_data
 /evaluation/venv
 /evaluation/output
 /.snakemake
 /.pixi
 /.test
+pixi.lock
+pixi.toml
