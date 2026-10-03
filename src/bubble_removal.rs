@@ -128,11 +128,11 @@ pub fn remove_bubbles(graph: &mut OverlapGraph, max_bubble_len: usize, min_suppo
     }
 
     // snapshot of nodes to iterate safely
-    let node_keys: Vec<String> = graph.nodes.keys().cloned().collect();
+    let node_keys: Vec<String> = crate::utils::order_keys(graph.nodes.keys().cloned());
 
     for n in node_keys.iter() {
         // get outgoing neighbors (clone so we don't borrow across mutation)
-        let outgoing = match graph.nodes.get(n) {
+        let mut outgoing = match graph.nodes.get(n) {
             Some(n) => n
                 .edges
                 .iter()
@@ -140,6 +140,9 @@ pub fn remove_bubbles(graph: &mut OverlapGraph, max_bubble_len: usize, min_suppo
                 .collect::<Vec<_>>(),
             None => continue,
         };
+        if crate::utils::has_seed() {
+            outgoing.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        }
 
         // skip if less than 2 outgoing edges
         if outgoing.len() < 2 {
@@ -178,7 +181,11 @@ pub fn remove_bubbles(graph: &mut OverlapGraph, max_bubble_len: usize, min_suppo
                 }
 
                 // pick best sink node: minimal combined depth
-                meetings.sort_unstable_by_key(|k| k.1);
+                if crate::utils::has_seed() {
+                    meetings.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+                } else {
+                    meetings.sort_unstable_by_key(|k| k.1);
+                }
                 let (meet_node, _meet_depth) = meetings[0];
 
                 // reconstruct paths start_a -> meet_node and start_b -> meet_node

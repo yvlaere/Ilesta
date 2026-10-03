@@ -54,6 +54,11 @@ fasterq-dump SRR28262566.sra
 Ilesta assemble --reads-fq SRR28262566.fastq --output-dir out_dir --threads 16
 ```
 
+Use `--seed 42` with `assemble` or `alignment-filtering` for reproducible
+results with identical inputs, options, and tool versions. Seed `0` uses sorted
+traversal; nonzero seeds use a deterministic shuffle of sorted traversal keys.
+Without a seed, traversal order remains unspecified. FASTQ input may also be gzip-compressed.
+
 This will produce:
 - `out_dir/unitigs.fa` (unitigs in FASTA format)
 - `out_dir/unitigs.gfa` (assembly graph in GFA format)
@@ -110,6 +115,8 @@ Output:
 Read filtering and alignment:
   -r, --reads-fq <READS_FQ>
           Read filtering and alignment parameters Input reads in FASTQ format
+      --read-type <READ_TYPE>
+          Read type / sequencing technology (ont, pb-clr, pb-hifi) [default: ont] [possible values: ont, pb-clr, pb-hifi]
   -t, --threads <THREADS>
           Number of threads [default: 4]
   -a, --paf <PAF>

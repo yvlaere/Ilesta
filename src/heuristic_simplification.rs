@@ -7,7 +7,7 @@ pub fn remove_short_edges(graph: &mut OverlapGraph, drop_ratio: f64) -> usize {
     let mut n_short = 0;
 
     // iterate over a snapshot of current node keys (no mutation while iterating)
-    let keys: Vec<String> = graph.nodes.keys().cloned().collect();
+    let keys: Vec<String> = crate::utils::order_keys(graph.nodes.keys().cloned());
 
     for node_id in keys {
         // Get the outgoing edges for this node
@@ -61,7 +61,7 @@ pub fn remove_multi_edges(graph: &mut OverlapGraph) -> usize {
     use std::collections::HashMap;
 
     let mut n_multi = 0usize;
-    let keys: Vec<String> = graph.nodes.keys().cloned().collect();
+    let keys: Vec<String> = crate::utils::order_keys(graph.nodes.keys().cloned());
 
     for src in keys {
         let edges_snapshot = match graph.nodes.get(&src) {

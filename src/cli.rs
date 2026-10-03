@@ -1,4 +1,32 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ReadType {
+    #[default]
+    #[value(name = "ont")]
+    Ont,
+    #[value(name = "pb-clr")]
+    PbClr,
+    #[value(name = "pb-hifi")]
+    PbHifi,
+}
+
+impl ReadType {
+    pub fn minimap2_args(&self) -> &'static [&'static str] {
+        match self {
+            ReadType::Ont => &["-x", "ava-ont"],
+            ReadType::PbClr => &["-x", "ava-pb"],
+            ReadType::PbHifi => &[
+                "-x", "ava-ont",
+                "-k", "21",
+                "-w", "11",
+                "-g", "1000",
+                "-m", "200",
+                "-r", "2000",
+            ],
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -33,6 +61,10 @@ pub struct AlignReadsArgs {
     #[arg(short = 'r', long)]
     pub reads_fq: String,
 
+    /// Read type / sequencing technology
+    #[arg(long, default_value = "ont")]
+    pub read_type: ReadType,
+
     /// Number of threads
     #[arg(short = 't', long, default_value_t = 4)]
     pub threads: usize,
@@ -64,6 +96,7 @@ impl From<&AlignReadsArgs> for crate::configs::AlignReadsConfig {
             min_read_length: args.min_read_length,
             min_base_quality: args.min_base_quality,
             genome_size: args.genome_size,
+            read_type: args.read_type,
         }
     }
 }
@@ -97,6 +130,10 @@ pub struct AlignmentFilteringArgs {
     /// Overhang ratio
     #[arg(long, default_value_t = 0.8)]
     pub overhang_ratio: f32,
+
+    /// Optional random seed for reproducible results
+    #[arg(long)]
+    pub seed: Option<u64>,
 }
 
 impl From<&AlignmentFilteringArgs> for crate::configs::AlignmentFilteringConfig {
@@ -109,6 +146,7 @@ impl From<&AlignmentFilteringArgs> for crate::configs::AlignmentFilteringConfig 
             min_overlap_count: args.min_overlap_count,
             min_percent_identity: args.min_percent_identity,
             overhang_ratio: args.overhang_ratio,
+            seed: args.seed,
         }
     }
 }
@@ -130,6 +168,10 @@ pub struct AssembleArgs {
     /// Input reads in FASTQ format
     #[arg(short = 'r', long, help_heading = "Read filtering and alignment")]
     pub reads_fq: String,
+
+    /// Read type / sequencing technology
+    #[arg(long, default_value = "ont", help_heading = "Read filtering and alignment")]
+    pub read_type: ReadType,
 
     /// Number of threads
     #[arg(short = 't', long, default_value_t = 4, help_heading = "Read filtering and alignment")]
@@ -214,6 +256,10 @@ pub struct AssembleArgs {
     /// Minimum identity for a completion bridge
     #[arg(long, default_value_t = 0.8f64, help_heading = "Assembly")]
     pub completion_min_identity: f64,
+
+    /// Optional random seed for reproducible results
+    #[arg(long, help_heading = "Assembly")]
+    pub seed: Option<u64>,
 }
 
 impl From<&AssembleArgs> for crate::configs::AssembleConfig {
@@ -230,6 +276,7 @@ impl From<&AssembleArgs> for crate::configs::AssembleConfig {
             min_read_length: args.min_read_length,
             min_base_quality: args.min_base_quality,
             genome_size: args.genome_size,
+            read_type: args.read_type,
 
             // alignment filtering
             min_overlap_length: args.min_overlap_length,
@@ -249,6 +296,83 @@ impl From<&AssembleArgs> for crate::configs::AssembleConfig {
             completion_rounds: args.completion_rounds,
             completion_min_alignment_len: args.completion_min_alignment_len,
             completion_min_identity: args.completion_min_identity,
+            seed: args.seed,
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_minimap2_args_for_read_types() {
+        assert_eq!(ReadType::Ont.minimap2_args(), &["-x", "ava-ont"]);
+        assert_eq!(ReadType::PbClr.minimap2_args(), &["-x", "ava-pb"]);
+        assert_eq!(
+            ReadType::PbHifi.minimap2_args(),
+            &[
+                "-x", "ava-ont",
+                "-k", "21",
+                "-w", "11",
+                "-g", "1000",
+                "-m", "200",
+                "-r", "2000",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cli_read_type_default() {
+        let cli = Cli::try_parse_from(["Ilesta", "align", "-r", "reads.fq"]).unwrap();
+        match cli.command {
+            Commands::Align(args) => assert_eq!(args.read_type, ReadType::Ont),
+            _ => panic!("Expected Align command"),
+        }
+
+        let cli_asm = Cli::try_parse_from(["Ilesta", "assemble", "-r", "reads.fq"]).unwrap();
+        match cli_asm.command {
+            Commands::Assemble(args) => assert_eq!(args.read_type, ReadType::Ont),
+            _ => panic!("Expected Assemble command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_read_type_explicit() {
+        for (flag_val, expected) in [
+            ("ont", ReadType::Ont),
+            ("pb-clr", ReadType::PbClr),
+            ("pb-hifi", ReadType::PbHifi),
+        ] {
+            let cli =
+                Cli::try_parse_from(["Ilesta", "align", "-r", "reads.fq", "--read-type", flag_val])
+                    .unwrap();
+            match cli.command {
+                Commands::Align(args) => assert_eq!(args.read_type, expected),
+                _ => panic!("Expected Align command"),
+            }
+
+            let cli_asm = Cli::try_parse_from([
+                "Ilesta",
+                "assemble",
+                "-r",
+                "reads.fq",
+                "--read-type",
+                flag_val,
+            ])
+            .unwrap();
+            match cli_asm.command {
+                Commands::Assemble(args) => assert_eq!(args.read_type, expected),
+                _ => panic!("Expected Assemble command"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_cli_read_type_invalid() {
+        let result =
+            Cli::try_parse_from(["Ilesta", "align", "-r", "reads.fq", "--read-type", "illumina"]);
+        assert!(result.is_err());
+    }
+}
+

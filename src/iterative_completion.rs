@@ -29,10 +29,13 @@ fn run_minimap2_against_reference(
     reference_fasta: &Path,
     output_paf: &Path,
     threads: usize,
+    read_type: crate::cli::ReadType,
 ) -> std::io::Result<()> {
-    let status = Command::new("minimap2")
-        .arg("-x")
-        .arg("ava-ont")
+    let mut cmd = Command::new("minimap2");
+    for arg in read_type.minimap2_args() {
+        cmd.arg(arg);
+    }
+    let status = cmd
         .arg("-t")
         .arg(threads.to_string())
         .arg(reference_fasta)
@@ -153,8 +156,9 @@ pub fn run_completion_round(
     min_alignment_len: u32,
     min_identity: f64,
     threads: usize,
+    read_type: crate::cli::ReadType,
 ) -> std::io::Result<Vec<CompletionEdge>> {
-    run_minimap2_against_reference(reads_fastq, unitigs_fasta, output_paf, threads)?;
+    run_minimap2_against_reference(reads_fastq, unitigs_fasta, output_paf, threads, read_type)?;
     let bridges = parse_paf_bridges(output_paf, min_alignment_len, min_identity)?;
     let mut edges = Vec::new();
 

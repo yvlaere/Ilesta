@@ -103,7 +103,12 @@ impl AlignmentFilteringOutput {
     pub fn serialize_overlaps(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let file = File::create(path)?;
         let writer = BufWriter::new(file);
-        bincode::serialize_into(writer, &self.overlaps)?;
+        if crate::utils::has_seed() {
+            let sorted: std::collections::BTreeMap<_, _> = self.overlaps.iter().collect();
+            bincode::serialize_into(writer, &sorted)?;
+        } else {
+            bincode::serialize_into(writer, &self.overlaps)?;
+        }
 
         Ok(())
     }

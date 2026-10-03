@@ -106,7 +106,7 @@ pub fn trim_tips(graph: &mut OverlapGraph, max_ext: usize) {
     let mut to_delete: HashSet<String> = HashSet::new();
 
     // iterate over a snapshot of current node keys (no mutation while iterating)
-    let keys: Vec<String> = graph.nodes.keys().cloned().collect();
+    let keys: Vec<String> = crate::utils::order_keys(graph.nodes.keys().cloned());
     for n in keys.into_iter() {
         // skip nodes that may already be deleted
         if !graph.nodes.contains_key(&n) {

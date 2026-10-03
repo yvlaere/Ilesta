@@ -18,7 +18,7 @@ enum Mark {
 /// Reduce transitive edges
 pub fn reduce_transitive_edges(g: &mut OverlapGraph, fuzz: u32) {
     // prepare node list to iterate deterministically and avoid borrow conflicts
-    let node_keys: Vec<String> = g.nodes.keys().cloned().collect();
+    let node_keys: Vec<String> = crate::utils::order_keys(g.nodes.keys().cloned());
 
     // mark: per-node status (Vacant/InPlay/Eliminated)
     let mut mark: HashMap<String, Mark> = HashMap::with_capacity(g.nodes.len());
@@ -133,6 +133,10 @@ pub fn reduce_transitive_edges(g: &mut OverlapGraph, fuzz: u32) {
                 }
             }
         }
+    }
+
+    if utils::has_seed() {
+        edges_to_remove.sort_unstable();
     }
 
     // Now remove all edges in a separate pass

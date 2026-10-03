@@ -1,0 +1,8 @@
+target/
+.test/
+.pixi/
+.git/
+evaluation/test_data/
+evaluation/output/
+evaluation/venv/
+.snakemake/

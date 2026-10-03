@@ -1,0 +1,33 @@
+[workspace]
+name = "ilesta"
+version = "1.2.1"
+description = "De novo genome assembler for long reads"
+authors = ["yvlaere"]
+channels = ["conda-forge", "bioconda"]
+platforms = ["linux-64", "osx-arm64"]
+
+
+[dependencies]
+minimap2 = ">=2.28"
+
+[feature.dev.dependencies]
+rust = ">=1.85.0"
+
+[feature.dev.tasks]
+build = "cargo build --release"
+build-debug = "cargo build"
+test = "cargo test"
+
+[feature.eval.dependencies]
+python = ">=3.11"
+snakemake = ">=8"
+matplotlib = ">=3.8"
+
+[feature.eval.tasks]
+run-eval = "snakemake -s evaluation/evaluation.smk --configfile evaluation/config.yml -c 4"
+
+[environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+eval = { features = ["eval"], solve-group = "default" }
+all = { features = ["dev", "eval"], solve-group = "default" }

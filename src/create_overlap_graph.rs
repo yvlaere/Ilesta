@@ -62,7 +62,11 @@ impl Node {
 
     /// Sort edges by length (ascending).
     pub fn sort_edges(&mut self) {
-        self.edges.sort_unstable_by_key(|e| e.edge_len);
+        if crate::utils::has_seed() {
+            self.edges.sort_by(|a, b| a.edge_len.cmp(&b.edge_len).then_with(|| a.target_id.cmp(&b.target_id)));
+        } else {
+            self.edges.sort_unstable_by_key(|e| e.edge_len);
+        }
     }
 }
 
@@ -159,8 +163,10 @@ impl OverlapGraph {
         writeln!(w, "  edge [fontname=\"Helvetica\"];")?;
         writeln!(w)?;
 
+        let node_ids = crate::utils::order_keys(self.nodes.keys().cloned());
+
         // Emit nodes explicitly (optional but useful for styling later)
-        for node_id in self.nodes.keys() {
+        for node_id in &node_ids {
             writeln!(
                 w,
                 "  \"{}\" [style=filled fillcolor={} ];",
@@ -172,16 +178,23 @@ impl OverlapGraph {
         writeln!(w)?;
 
         // Emit edges
-        for node in self.nodes.values() {
+        for node_id in &node_ids {
+            let node = &self.nodes[node_id];
             let from = escape_dot(&node.node_id);
-            for e in &node.edges {
+            let edges = if crate::utils::has_seed() {
+                let mut e_copy = node.edges.clone();
+                e_copy.sort_by(|a, b| a.target_id.cmp(&b.target_id).then_with(|| a.edge_len.cmp(&b.edge_len)));
+                e_copy
+            } else {
+                node.edges.clone()
+            };
+            for e in &edges {
                 let to = escape_dot(&e.target_id);
                 writeln!(
                     w,
                     "  \"{}\" -> \"{}\";",
                     from,
-                    to //"  \"{}\" -> \"{}\" [label=\"len={} ovl={} id={:.3}\"];",
-                       //from, to, e.edge_len, e.overlap_len, e.identity
+                    to
                 )?;
             }
         }
@@ -213,7 +226,8 @@ pub fn run_create_overlap_graph(
     println!("=== OVERLAP GRAPH CREATION ===");
     let mut g = OverlapGraph::new();
 
-    for ((_query_id, _target_id), o) in overlaps.iter() {
+    let entries = crate::utils::order_entries_by_key(overlaps.iter().map(|(k, v)| (*k, v)));
+    for ((_query_id, _target_id), o) in entries {
         // add overlap to the graph
 
         // original orientation

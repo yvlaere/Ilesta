@@ -20,8 +20,7 @@ fn filter_fastq(
     min_q: f32,
 ) -> std::io::Result<Vec<ReadStats>> {
     // read the file
-    let file = File::open(input_path)?;
-    let reader = BufReader::new(file);
+    let reader = crate::utils::open_fastq_reader(input_path)?;
 
     let output = File::create(output_path)?;
     let mut writer = BufWriter::new(output);
@@ -121,8 +120,7 @@ fn subsample_fastq(
         total_len
     );
 
-    let file = File::open(input_path)?;
-    let reader = BufReader::new(file);
+    let reader = crate::utils::open_fastq_reader(input_path)?;
 
     let output = File::create(output_path)?;
     let mut writer = BufWriter::new(output);
@@ -181,13 +179,16 @@ fn run_minimap2(
     query: &std::path::Path,
     threads: usize,
     out_path: &std::path::Path,
+    read_type: crate::cli::ReadType,
 ) -> std::io::Result<()> {
     // time for debugging
     let start_time = Instant::now();
 
-    let mut child = Command::new("minimap2")
-        .arg("-x")
-        .arg("ava-ont")
+    let mut cmd = Command::new("minimap2");
+    for arg in read_type.minimap2_args() {
+        cmd.arg(arg);
+    }
+    let mut child = cmd
         .arg("-t")
         .arg(&threads.to_string())
         .arg(query)
@@ -247,6 +248,7 @@ pub fn align_reads(
     min_read_length: u32,
     min_base_quality: f32,
     input_genome_size: Option<u32>,
+    read_type: crate::cli::ReadType,
 ) -> std::io::Result<std::path::PathBuf> {
     println!("Computing read stats...");
 
@@ -277,7 +279,7 @@ pub fn align_reads(
 
             // align reads for genome size estimation
             println!("Running minimap2...");
-            run_minimap2(&subsampled_path, threads, output_paf)?;
+            run_minimap2(&subsampled_path, threads, output_paf, read_type)?;
             println!(
                 "Genome size estimation alignment finished. Alignments written to {}",
                 output_paf.display()
@@ -309,7 +311,7 @@ pub fn align_reads(
 
                 // align reads for genome size estimation
                 println!("Running minimap2...");
-                run_minimap2(&subsampled_path, threads, output_paf)?;
+                run_minimap2(&subsampled_path, threads, output_paf, read_type)?;
                 println!(
                     "Genome size estimation alignment finished. Alignments written to {}",
                     output_paf.display()
@@ -331,7 +333,7 @@ pub fn align_reads(
     let subsampled_output = "filtered.fq";
     let subsampled_output_path = out_dir.join(subsampled_output);
     subsample_fastq(reads_fq, &subsampled_output_path, &stats, genome_size * 50)?;
-    run_minimap2(&subsampled_output_path, threads, output_paf)?;
+    run_minimap2(&subsampled_output_path, threads, output_paf, read_type)?;
     println!(
         "Final alignment finished. Alignments written to {}",
         output_paf.display()
