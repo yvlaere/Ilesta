@@ -1,9 +1,11 @@
 import os
 import random
+import gzip
 
 configfile: "config.yaml"
 
 COVERAGES = config["coverages"]
+prefix = config["output_prefix"]
 
 # -------------------------------------------------------------------
 # Rule all
@@ -26,7 +28,11 @@ rule subsample_reads:
     params:
         genome_size=config["genome_size"]
     run:
-        import random
+
+        def open_reads(path):
+            if str(path).endswith(".gz"):
+                return gzip.open(path, "rt")
+            return open(path, "r")
 
         cov = float(wildcards.cov)
         rng = random.Random()
@@ -35,7 +41,7 @@ rule subsample_reads:
 
         # first pass: total bp
         total_bp = 0
-        with open(input.fq) as fin:
+        with open_reads(input.fq) as fin:
             while True:
                 h = fin.readline()
                 if not h:
@@ -50,7 +56,7 @@ rule subsample_reads:
         keep_p = min(1.0, target_bp / total_bp)
 
         # second pass
-        with open(input.fq) as fin, open(output.fq, "w") as fout:
+        with open_reads(input.fq) as fin, open(output.fq, "w") as fout:
             while True:
                 h = fin.readline()
                 if not h:
@@ -66,7 +72,6 @@ rule subsample_reads:
                     fout.write(s)
                     fout.write(sep)
                     fout.write(q)
-
 
 rule read_subsample_stats:
     input:
@@ -116,9 +121,13 @@ rule assemble:
     input:
         fq="evaluation/output/subsampled_{cov}.fq"
     output:
-        fa="evaluation/output/coverage_{cov}/{prefix}.fa"
+        fa=f"evaluation/output/coverage_{{cov}}/{prefix}.fa"
     params:
-        prefix=config["output_prefix"]
+        completion_flag=(
+            "--completion-enabled=true"
+            if config["completion_enabled"]
+            else "--completion-enabled"
+        )
     threads: config["threads"]
     shell:
         """
@@ -136,14 +145,14 @@ rule assemble:
             --min-overlap-count={config[min_overlap_count]} \
             --min-percent-identity={config[min_percent_identity]} \
             --overhang-ratio={config[overhang_ratio]} \
-            --output-prefix={params.prefix} \
+            --output-prefix={config[output_prefix]} \
             --max-bubble-length={config[max_bubble_length]} \
             --min-support-ratio={config[min_support_ratio]} \
             --max-tip-len={config[max_tip_len]} \
             --fuzz={config[fuzz]} \
             --cleanup-iterations={config[cleanup_iterations]} \
             --short-edge-ratio={config[short_edge_ratio]} \
-            {('--completion-enabled=true' if config['completion_enabled'] else '--completion-enabled')} \
+            {params.completion_flag} \
             --completion-rounds={config[completion_rounds]} \
             --completion-min-alignment-len={config[completion_min_alignment_len]} \
             --completion-min-identity={config[completion_min_identity]}
@@ -155,11 +164,9 @@ rule assemble:
 # -------------------------------------------------------------------
 rule compute_stats:
     input:
-        fa="evaluation/output/coverage_{cov}/{prefix}.fa"
+        fa=f"evaluation/output/coverage_{{cov}}/{prefix}.fa"
     output:
         stats="evaluation/output/coverage_{cov}/stats.txt"
-    params:
-        prefix=config["output_prefix"]
     run:
         def get_lengths(fasta):
             lengths = []

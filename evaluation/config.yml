@@ -1,4 +1,4 @@
-reads_fq: evaluation/test_data/SRR28262566.fastq
+reads_fq: evaluation/test_data/benchmark/Shigella_flexneri/nanopore.fastq.gz
 output_dir: evaluation/output
 
 threads: 4
