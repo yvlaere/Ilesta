@@ -8,6 +8,7 @@ mod create_overlap_graph;
 mod graph_analysis;
 mod heuristic_simplification;
 mod iterative_completion;
+mod plasmid_rescue;
 mod tip_trimming;
 mod transitive_edge_reduction;
 mod utils;
@@ -40,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let paf_path = out_dir.join(&config.paf);
-            let subsampled_path = align_reads::align_reads(
+            let _reads = align_reads::align_reads(
                 reads_path,
                 config.threads,
                 &paf_path,
@@ -89,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // read filtering and alignment
             let paf_path = out_dir.join(&config.paf);
             println!("=== READ FILTERING AND ALIGNMENT ===");
-            let subsampled_path = align_reads::align_reads(
+            let reads = align_reads::align_reads(
                 reads_path,
                 config.threads,
                 &paf_path,
@@ -99,6 +100,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.genome_size,
                 config.read_type,
             )?;
+            println!("Filtered read count: {}", reads.filtered_read_count);
+            println!(
+                "Reads used in primary assembly: {}",
+                reads.primary_read_count
+            );
             println!("=== READ FILTERING AND ALIGNMENT COMPLETE ===");
 
             // Determine the path to overlaps: either use provided overlaps or run alignment filtering
@@ -225,21 +231,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 graph.nodes.values().map(|n| n.edges.len()).sum::<usize>()
             );
 
-            if config.completion_enabled {
+            if config.completion_enabled || config.rescue_plasmids {
                 println!("\n=== STARTING READ-GUIDED COMPLETION ===");
+                println!(
+                    "Reads used for completion/scaffolding: {}",
+                    reads.filtered_read_count
+                );
+                let mut total_unitig_joins = 0;
                 for round in 1..=config.completion_rounds {
                     println!("\n--- Completion round {} ---", round);
-                    let first_pass_unitigs_path = out_dir.join(format!("{}.first_pass.fa", config.output_prefix));
+                    let first_pass_unitigs_path =
+                        out_dir.join(format!("{}.first_pass.fa", config.output_prefix));
                     let initial_compressed = compress_graph::compress_unitigs(
                         &graph,
-                        &subsampled_path,
+                        &reads.primary_reads,
                         &first_pass_unitigs_path,
                     );
-                    let _ = initial_compressed;
-                    let completion_paf = out_dir.join(format!("{}.completion.paf", config.output_prefix));
+                    let completion_paf =
+                        out_dir.join(format!("{}.completion.paf", config.output_prefix));
                     let completion = iterative_completion::run_completion_round(
                         &graph,
-                        &subsampled_path,
+                        &reads.filtered_reads,
                         &first_pass_unitigs_path,
                         &completion_paf,
                         config.completion_min_alignment_len,
@@ -251,16 +263,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("No completion bridges were added.");
                         break;
                     }
-                    println!("Added {} completion bridges", completion.len());
-                    for bridge in completion {
-                        graph.add_bridge_edge(
-                            &bridge.from_node,
-                            &bridge.to_node,
-                            bridge.edge_len,
-                            bridge.overlap_len,
-                            bridge.identity,
-                        );
-                    }
+                    let joins = iterative_completion::apply_completion_edges(
+                        &mut graph,
+                        &initial_compressed,
+                        &completion,
+                    );
+                    total_unitig_joins += joins;
+                    println!("Added {} unitig joins", joins);
 
                     for iteration in 1..=config.cleanup_iterations {
                         println!("  Cleanup iteration {}", iteration);
@@ -278,10 +287,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             config.short_edge_ratio,
                         );
                         println!("  Removed {} short edges", n_short);
-                        bubble_removal::remove_bubbles(&mut graph, max_bubble_len, min_support_ratio);
+                        bubble_removal::remove_bubbles(
+                            &mut graph,
+                            max_bubble_len,
+                            min_support_ratio,
+                        );
                         tip_trimming::trim_tips(&mut graph, max_tip_len);
                     }
                 }
+                println!("Total unitig joins made: {}", total_unitig_joins);
                 println!("\n=== READ-GUIDED COMPLETION COMPLETE ===");
             }
 
@@ -297,7 +311,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // compress into unitigs into output dir
             let out_path = out_dir.join(format!("{}.fa", config.output_prefix));
             let mut compressed =
-                compress_graph::compress_unitigs(&graph, &subsampled_path, &out_path);
+                compress_graph::compress_unitigs(&graph, &reads.primary_reads, &out_path);
             println!(
                 "Assembly produced {} unitigs (written to {})",
                 compressed.unitigs.len(),
@@ -307,6 +321,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let gfa_str = gfa_path.to_str().ok_or("invalid output path")?;
             compressed.write_gfa(gfa_str, &overlaps)?;
             println!("Wrote GFA to {}", gfa_str);
+
+            if config.rescue_plasmids {
+                println!("\n=== STARTING PLASMID RESCUE ===");
+                drop(compressed);
+                drop(graph);
+                drop(overlaps);
+                let stats = plasmid_rescue::run_rescue_stage(
+                    &reads.filtered_reads,
+                    &out_path,
+                    out_dir,
+                    config.threads,
+                    config.read_type,
+                    config.min_base_quality,
+                    config.min_read_length.saturating_sub(1).min(500).max(1),
+                )?;
+                println!("Rescued read count: {}", stats.rescued_read_count);
+                println!("Rescued read bases: {}", stats.rescued_read_bases);
+                println!("Rescued unitig count: {}", stats.rescued_unitig_count);
+                println!("Rescued assembly length: {}", stats.rescued_assembly_length);
+                println!("=== PLASMID RESCUE COMPLETE ===");
+            }
 
             println!("\n=== ASSEMBLY COMPLETE ===");
         }
@@ -366,7 +401,9 @@ mod tests {
                 let output = alignment_filtering::AlignmentFilteringOutput {
                     overlaps: fixture_overlaps(attempt % 2 != 0),
                 };
-                output.serialize_overlaps(overlaps_path.to_str().unwrap()).unwrap();
+                output
+                    .serialize_overlaps(overlaps_path.to_str().unwrap())
+                    .unwrap();
                 let overlap_bytes = std::fs::read(&overlaps_path).unwrap();
                 let overlaps: HashMap<(usize, usize), Overlap> =
                     bincode::deserialize(&overlap_bytes).unwrap();
@@ -402,7 +439,9 @@ mod tests {
                 let mut compressed =
                     compress_graph::compress_unitigs(&graph, &fastq_path, &fasta_path);
                 assert!(compressed.edges.len() >= 2);
-                compressed.write_gfa(gfa_path.to_str().unwrap(), &overlaps).unwrap();
+                compressed
+                    .write_gfa(gfa_path.to_str().unwrap(), &overlaps)
+                    .unwrap();
                 let result = (
                     snapshot,
                     overlap_bytes,

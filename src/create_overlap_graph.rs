@@ -63,7 +63,11 @@ impl Node {
     /// Sort edges by length (ascending).
     pub fn sort_edges(&mut self) {
         if crate::utils::has_seed() {
-            self.edges.sort_by(|a, b| a.edge_len.cmp(&b.edge_len).then_with(|| a.target_id.cmp(&b.target_id)));
+            self.edges.sort_by(|a, b| {
+                a.edge_len
+                    .cmp(&b.edge_len)
+                    .then_with(|| a.target_id.cmp(&b.target_id))
+            });
         } else {
             self.edges.sort_unstable_by_key(|e| e.edge_len);
         }
@@ -116,15 +120,17 @@ impl OverlapGraph {
         edge_len: u32,
         overlap_len: u32,
         identity: f64,
-    ) {
+    ) -> bool {
         self.add_node(from_id.to_string());
         self.add_node(to_id.to_string());
         if let Some(node) = self.nodes.get_mut(from_id) {
             if node.edges.iter().any(|e| e.target_id == to_id) {
-                return;
+                return false;
             }
             node.add_edge(to_id, edge_len, overlap_len, identity);
+            return true;
         }
+        false
     }
 
     /// Write the overlap graph to a DOT file for visualization
@@ -183,19 +189,18 @@ impl OverlapGraph {
             let from = escape_dot(&node.node_id);
             let edges = if crate::utils::has_seed() {
                 let mut e_copy = node.edges.clone();
-                e_copy.sort_by(|a, b| a.target_id.cmp(&b.target_id).then_with(|| a.edge_len.cmp(&b.edge_len)));
+                e_copy.sort_by(|a, b| {
+                    a.target_id
+                        .cmp(&b.target_id)
+                        .then_with(|| a.edge_len.cmp(&b.edge_len))
+                });
                 e_copy
             } else {
                 node.edges.clone()
             };
             for e in &edges {
                 let to = escape_dot(&e.target_id);
-                writeln!(
-                    w,
-                    "  \"{}\" -> \"{}\";",
-                    from,
-                    to
-                )?;
+                writeln!(w, "  \"{}\" -> \"{}\";", from, to)?;
             }
         }
 

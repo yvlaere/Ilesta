@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::process::Command;
 use std::time::Instant;
 
@@ -20,41 +20,13 @@ fn filter_fastq(
     min_q: f32,
 ) -> std::io::Result<Vec<ReadStats>> {
     // read the file
-    let reader = crate::utils::open_fastq_reader(input_path)?;
+    let mut reader = crate::utils::open_fastq_reader(input_path)?;
 
     let output = File::create(output_path)?;
     let mut writer = BufWriter::new(output);
 
-    // buffers reused for every read
-    let mut header = String::with_capacity(100);
-    let mut seq = String::with_capacity(10_000);
-    let mut plus = String::with_capacity(10);
-    let mut qual = String::with_capacity(10_000);
-
     let mut results = Vec::new();
-    let mut reader_lines = reader.lines();
-
-    loop {
-        // clear buffers
-        header.clear();
-        seq.clear();
-        plus.clear();
-        qual.clear();
-
-        // Read 4 lines per FASTQ record
-        if reader_lines
-            .next()
-            .map(|l| {
-                header.push_str(&l.unwrap());
-            })
-            .is_none()
-        {
-            break; // EOF
-        }
-        reader_lines.next().map(|l| seq.push_str(&l.unwrap()));
-        reader_lines.next().map(|l| plus.push_str(&l.unwrap()));
-        reader_lines.next().map(|l| qual.push_str(&l.unwrap()));
-
+    while let Some((header, seq, plus, qual)) = crate::utils::read_fastq_record(reader.as_mut())? {
         // parse read name
         let name = if header.starts_with('@') {
             &header[1..]
@@ -94,7 +66,7 @@ fn subsample_fastq(
     output_path: &std::path::Path,
     stats: &Vec<ReadStats>,
     nr_bases: u32,
-) -> std::io::Result<u32> {
+) -> std::io::Result<(u32, usize)> {
     // time for debugging
     let start_time = Instant::now();
 
@@ -120,50 +92,17 @@ fn subsample_fastq(
         total_len
     );
 
-    let reader = crate::utils::open_fastq_reader(input_path)?;
+    let mut reader = crate::utils::open_fastq_reader(input_path)?;
 
     let output = File::create(output_path)?;
     let mut writer = BufWriter::new(output);
 
-    let mut header = String::with_capacity(100);
-    let mut seq = String::with_capacity(10_000);
-    let mut plus = String::with_capacity(10);
-    let mut qual = String::with_capacity(10_000);
-
-    let mut reader_lines = reader.lines();
-
-    loop {
-        header.clear();
-        seq.clear();
-        plus.clear();
-        qual.clear();
-
-        if reader_lines
-            .next()
-            .map(|l| {
-                header.push_str(&l.unwrap());
-            })
-            .is_none()
-        {
-            break; // EOF
-        }
-
-        let name = if header.starts_with('@') {
-            &header[1..]
-        } else {
-            &header
-        };
+    while let Some((header, seq, plus, qual)) = crate::utils::read_fastq_record(reader.as_mut())? {
+        let name = header.strip_prefix('@').unwrap_or(&header);
 
         if !selected_reads.contains(name) {
-            // skip this read
-            reader_lines.next();
-            reader_lines.next();
-            reader_lines.next();
             continue;
         }
-        reader_lines.next().map(|l| seq.push_str(&l.unwrap()));
-        reader_lines.next().map(|l| plus.push_str(&l.unwrap()));
-        reader_lines.next().map(|l| qual.push_str(&l.unwrap()));
 
         writeln!(writer, "{}", header)?;
         writeln!(writer, "{}", seq)?;
@@ -172,7 +111,14 @@ fn subsample_fastq(
     }
 
     writer.flush()?;
-    Ok(total_len)
+    Ok((total_len, selected_reads.len()))
+}
+
+pub struct AlignReadsResult {
+    pub primary_reads: std::path::PathBuf,
+    pub filtered_reads: std::path::PathBuf,
+    pub filtered_read_count: usize,
+    pub primary_read_count: usize,
 }
 
 fn run_minimap2(
@@ -192,16 +138,20 @@ fn run_minimap2(
         .arg("-t")
         .arg(&threads.to_string())
         .arg(query)
-        .arg(query)
+        .arg(query) // self-alignment
         .arg("-o")
         .arg(out_path)
         .spawn()?;
 
     let status = child.wait()?;
-    assert!(status.success());
+    if !status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("minimap2 self-alignment failed with {status}"),
+        ));
+    }
 
     //println!("Minimap2 finished in {:?}", start_time.elapsed());
-
     Ok(())
 }
 
@@ -249,11 +199,11 @@ pub fn align_reads(
     min_base_quality: f32,
     input_genome_size: Option<u32>,
     read_type: crate::cli::ReadType,
-) -> std::io::Result<std::path::PathBuf> {
+) -> std::io::Result<AlignReadsResult> {
     println!("Computing read stats...");
 
     // compute read stats and filter reads
-    let basic_filtering = "basic_filtered.fq";
+    let basic_filtering = "filtered_all.fq";
     let basic_filtering_path = out_dir.join(basic_filtering);
     let stats = filter_fastq(
         reads_fq,
@@ -274,7 +224,7 @@ pub fn align_reads(
             // subsample reads for genome size estimation
             let subsampled = "subsampled.fq";
             let subsampled_path = out_dir.join(subsampled);
-            let subsampled_bases =
+            let (subsampled_bases, _) =
                 subsample_fastq(&basic_filtering_path, &subsampled_path, &stats, 500_000_000)?;
 
             // align reads for genome size estimation
@@ -285,7 +235,6 @@ pub fn align_reads(
                 output_paf.display()
             );
 
-            // estimate genome size
             let mut coverage = 0 as f64;
             (coverage, genome_size) = estimate_genome_size(output_paf)?;
 
@@ -296,7 +245,7 @@ pub fn align_reads(
                 // subsample reads for genome size estimation
                 let subsampled = "subsampled.fq";
                 let subsampled_path = out_dir.join(subsampled);
-                let subsampled_bases = subsample_fastq(
+                let (subsampled_bases, _) = subsample_fastq(
                     &basic_filtering_path,
                     &subsampled_path,
                     &stats,
@@ -332,17 +281,22 @@ pub fn align_reads(
     // final round of subsampling based on the estimated genome size
     let subsampled_output = "filtered.fq";
     let subsampled_output_path = out_dir.join(subsampled_output);
-    subsample_fastq(reads_fq, &subsampled_output_path, &stats, genome_size * 50)?;
+    let (_, primary_read_count) = subsample_fastq(
+        &basic_filtering_path,
+        &subsampled_output_path,
+        &stats,
+        genome_size * 50,
+    )?;
     run_minimap2(&subsampled_output_path, threads, output_paf, read_type)?;
     println!(
         "Final alignment finished. Alignments written to {}",
         output_paf.display()
     );
 
-    // remove intermediate files
-    std::fs::remove_file(basic_filtering_path)?;
-
-    let path = std::path::PathBuf::from(subsampled_output_path);
-
-    Ok(path)
+    Ok(AlignReadsResult {
+        primary_reads: subsampled_output_path,
+        filtered_reads: basic_filtering_path,
+        filtered_read_count: stats.len(),
+        primary_read_count,
+    })
 }

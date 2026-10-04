@@ -17,13 +17,16 @@ impl ReadType {
             ReadType::Ont => &["-x", "ava-ont"],
             ReadType::PbClr => &["-x", "ava-pb"],
             ReadType::PbHifi => &[
-                "-x", "ava-ont",
-                "-k", "21",
-                "-w", "11",
-                "-g", "1000",
-                "-m", "200",
-                "-r", "2000",
+                "-x", "ava-ont", "-k", "21", "-w", "11", "-g", "1000", "-m", "200", "-r", "2000",
             ],
+        }
+    }
+
+    pub fn mapping_args(&self) -> &'static [&'static str] {
+        match self {
+            ReadType::Ont => &["-x", "map-ont"],
+            ReadType::PbClr => &["-x", "map-pb"],
+            ReadType::PbHifi => &["-x", "map-hifi"],
         }
     }
 }
@@ -170,23 +173,46 @@ pub struct AssembleArgs {
     pub reads_fq: String,
 
     /// Read type / sequencing technology
-    #[arg(long, default_value = "ont", help_heading = "Read filtering and alignment")]
+    #[arg(
+        long,
+        default_value = "ont",
+        help_heading = "Read filtering and alignment"
+    )]
     pub read_type: ReadType,
 
     /// Number of threads
-    #[arg(short = 't', long, default_value_t = 4, help_heading = "Read filtering and alignment")]
+    #[arg(
+        short = 't',
+        long,
+        default_value_t = 4,
+        help_heading = "Read filtering and alignment"
+    )]
     pub threads: usize,
 
     /// Output PAF filename
-    #[arg(short = 'a', long, default_value = "alignments.paf", help_heading = "Read filtering and alignment")]
+    #[arg(
+        short = 'a',
+        long,
+        default_value = "alignments.paf",
+        help_heading = "Read filtering and alignment"
+    )]
     pub paf: String,
 
     /// Minimum read length
-    #[arg(long, default_value_t = 1000, help_heading = "Read filtering and alignment")]
+    #[arg(
+        long,
+        default_value_t = 1000,
+        help_heading = "Read filtering and alignment"
+    )]
     pub min_read_length: u32,
 
     /// Minimum average quality
-    #[arg(short = 'q', long, default_value_t = 10.0, help_heading = "Read filtering and alignment")]
+    #[arg(
+        short = 'q',
+        long,
+        default_value_t = 10.0,
+        help_heading = "Read filtering and alignment"
+    )]
     pub min_base_quality: f32,
 
     /// Optional input genome size (if not provided, will be estimated from data)
@@ -196,15 +222,30 @@ pub struct AssembleArgs {
     /// Alignment filtering parameters (optional if --overlaps is provided)
 
     /// Minimum overlap length
-    #[arg(short = 'l', long, default_value_t = 2000, help_heading = "Alignment filtering")]
+    #[arg(
+        short = 'l',
+        long,
+        default_value_t = 2000,
+        help_heading = "Alignment filtering"
+    )]
     pub min_overlap_length: u32,
 
     /// Minimum overlap count
-    #[arg(short = 'c', long, default_value_t = 3, help_heading = "Alignment filtering")]
+    #[arg(
+        short = 'c',
+        long,
+        default_value_t = 3,
+        help_heading = "Alignment filtering"
+    )]
     pub min_overlap_count: u32,
 
     /// Minimum percent identity
-    #[arg(short = 'i', long, default_value_t = 5.0, help_heading = "Alignment filtering")]
+    #[arg(
+        short = 'i',
+        long,
+        default_value_t = 5.0,
+        help_heading = "Alignment filtering"
+    )]
     pub min_percent_identity: f32,
 
     /// Overhang ratio
@@ -257,6 +298,13 @@ pub struct AssembleArgs {
     #[arg(long, default_value_t = 0.8f64, help_heading = "Assembly")]
     pub completion_min_identity: f64,
 
+    /// Assemble poorly represented reads once as a plasmid rescue stage
+    #[arg(long, default_value_t = true, action = clap::ArgAction::SetTrue, help_heading = "Assembly")]
+    pub rescue_plasmids: bool,
+
+    #[arg(long, hide = true, action = clap::ArgAction::SetTrue)]
+    pub no_rescue_plasmids: bool,
+
     /// Optional random seed for reproducible results
     #[arg(long, help_heading = "Assembly")]
     pub seed: Option<u64>,
@@ -296,6 +344,7 @@ impl From<&AssembleArgs> for crate::configs::AssembleConfig {
             completion_rounds: args.completion_rounds,
             completion_min_alignment_len: args.completion_min_alignment_len,
             completion_min_identity: args.completion_min_identity,
+            rescue_plasmids: args.rescue_plasmids && !args.no_rescue_plasmids,
             seed: args.seed,
         }
     }
@@ -312,14 +361,12 @@ mod tests {
         assert_eq!(
             ReadType::PbHifi.minimap2_args(),
             &[
-                "-x", "ava-ont",
-                "-k", "21",
-                "-w", "11",
-                "-g", "1000",
-                "-m", "200",
-                "-r", "2000",
+                "-x", "ava-ont", "-k", "21", "-w", "11", "-g", "1000", "-m", "200", "-r", "2000",
             ]
         );
+        assert_eq!(ReadType::Ont.mapping_args(), &["-x", "map-ont"]);
+        assert_eq!(ReadType::PbClr.mapping_args(), &["-x", "map-pb"]);
+        assert_eq!(ReadType::PbHifi.mapping_args(), &["-x", "map-hifi"]);
     }
 
     #[test]
@@ -370,9 +417,44 @@ mod tests {
 
     #[test]
     fn test_cli_read_type_invalid() {
-        let result =
-            Cli::try_parse_from(["Ilesta", "align", "-r", "reads.fq", "--read-type", "illumina"]);
+        let result = Cli::try_parse_from([
+            "Ilesta",
+            "align",
+            "-r",
+            "reads.fq",
+            "--read-type",
+            "illumina",
+        ]);
         assert!(result.is_err());
     }
-}
 
+    #[test]
+    fn test_cli_rescue_plasmids_flag() {
+        let cli =
+            Cli::try_parse_from(["Ilesta", "assemble", "-r", "reads.fq", "--rescue-plasmids"])
+                .unwrap();
+        match cli.command {
+            Commands::Assemble(args) => assert!(args.rescue_plasmids),
+            _ => panic!("Expected Assemble command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_can_disable_nested_plasmid_rescue() {
+        let cli = Cli::try_parse_from([
+            "Ilesta",
+            "assemble",
+            "-r",
+            "reads.fq",
+            "--no-rescue-plasmids",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Assemble(args) => {
+                let config: crate::configs::AssembleConfig = (&args).into();
+                assert!(!config.rescue_plasmids);
+            }
+            _ => panic!("Expected Assemble command"),
+        }
+    }
+}

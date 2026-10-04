@@ -7,7 +7,6 @@ use crate::utils;
 /// 2. get non-circular unitigs (start at nodes with indegree != 1 or outdegree != 1)
 /// 3. get circular unitigs (remaining unvisited nodes)
 use std::collections::{HashMap, HashSet};
-use std::io::BufRead;
 
 pub struct UnitigMember {
     pub node_id: String,
@@ -519,7 +518,7 @@ fn load_fastq_sequences(
 ) -> Result<HashMap<String, String>, String> {
     let mut seq_map: HashMap<String, String> = HashMap::new();
 
-    let reader = match crate::utils::open_fastq_reader(fastq_path) {
+    let mut reader = match crate::utils::open_fastq_reader(fastq_path) {
         Ok(r) => r,
         Err(e) => {
             return Err(format!(
@@ -529,24 +528,9 @@ fn load_fastq_sequences(
             ));
         }
     };
-    let mut lines = reader.lines();
-
-    while let Some(Ok(header)) = lines.next() {
-        if !header.starts_with('@') {
-            return Err(format!(
-                "invalid FASTQ format: expected header line starting with '@', got '{}'",
-                header
-            ));
-        }
-        let seq = match lines.next() {
-            Some(Ok(s)) => s,
-            _ => return Err("invalid FASTQ format: missing sequence line".to_string()),
-        };
-        // skip plus line
-        lines.next();
-        // skip quality line
-        lines.next();
-
+    while let Some((header, seq, _, _)) =
+        crate::utils::read_fastq_record(reader.as_mut()).map_err(|error| error.to_string())?
+    {
         let id = header[1..].split_whitespace().next().unwrap().to_string();
         seq_map.insert(id, seq);
     }

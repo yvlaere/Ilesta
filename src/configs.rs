@@ -57,5 +57,6 @@ pub struct AssembleConfig {
     pub completion_rounds: u32,
     pub completion_min_alignment_len: u32,
     pub completion_min_identity: f64,
+    pub rescue_plasmids: bool,
     pub seed: Option<u64>,
 }
