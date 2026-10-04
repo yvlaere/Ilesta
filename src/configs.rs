@@ -11,6 +11,8 @@ pub struct AlignReadsConfig {
     pub min_read_length: u32,
     pub min_base_quality: f32,
     pub genome_size: Option<u32>,
+    pub target_coverage: u32,
+    pub minimap_batch_size: String,
     pub read_type: ReadType,
 }
 
@@ -38,6 +40,7 @@ pub struct AssembleConfig {
     pub min_base_quality: f32,
     pub genome_size: Option<u32>,
     pub target_coverage: u32,
+    pub minimap_batch_size: String,
     pub read_type: ReadType,
 
     // alignment filtering

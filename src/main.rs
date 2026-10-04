@@ -50,6 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.min_base_quality,
                 config.genome_size,
                 config.target_coverage,
+                &config.minimap_batch_size,
                 config.read_type,
             )?;
         }
@@ -100,6 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.min_base_quality,
                 config.genome_size,
                 config.target_coverage,
+                &config.minimap_batch_size,
                 config.read_type,
             )?;
             println!("Filtered read count: {}", reads.filtered_read_count);
@@ -340,6 +342,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     config.read_type,
                     config.min_base_quality,
                     config.min_read_length.saturating_sub(1).min(500).max(1),
+                    &config.minimap_batch_size,
                 )?;
                 println!("Rescued read count: {}", stats.rescued_read_count);
                 println!("Rescued read bases: {}", stats.rescued_read_bases);

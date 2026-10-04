@@ -87,6 +87,14 @@ pub struct AlignReadsArgs {
     /// Optional input genome size (if not provided, will be estimated from data)
     #[arg(long)]
     pub genome_size: Option<u32>,
+
+    /// Target read coverage for assembly input downsampling
+    #[arg(long, default_value_t = 50u32)]
+    pub target_coverage: u32,
+
+    /// Minimap2 query minibatch size for self-alignment (e.g. 500M)
+    #[arg(long, default_value = "500M")]
+    pub minimap_batch_size: String,
 }
 
 impl From<&AlignReadsArgs> for crate::configs::AlignReadsConfig {
@@ -99,6 +107,8 @@ impl From<&AlignReadsArgs> for crate::configs::AlignReadsConfig {
             min_read_length: args.min_read_length,
             min_base_quality: args.min_base_quality,
             genome_size: args.genome_size,
+            target_coverage: args.target_coverage,
+            minimap_batch_size: args.minimap_batch_size.clone(),
             read_type: args.read_type,
         }
     }
@@ -227,6 +237,14 @@ pub struct AssembleArgs {
     )]
     pub target_coverage: u32,
 
+    /// Minimap2 query minibatch size for self-alignment (e.g. 500M)
+    #[arg(
+        long,
+        default_value = "500M",
+        help_heading = "Read filtering and alignment"
+    )]
+    pub minimap_batch_size: String,
+
     /// Alignment filtering parameters (optional if --overlaps is provided)
 
     /// Minimum overlap length
@@ -333,6 +351,7 @@ impl From<&AssembleArgs> for crate::configs::AssembleConfig {
             min_base_quality: args.min_base_quality,
             genome_size: args.genome_size,
             target_coverage: args.target_coverage,
+            minimap_batch_size: args.minimap_batch_size.clone(),
             read_type: args.read_type,
 
             // alignment filtering
@@ -435,6 +454,52 @@ mod tests {
             "illumina",
         ]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_align_target_coverage_option() {
+        let default_cli = Cli::try_parse_from(["Ilesta", "align", "-r", "reads.fq"]).unwrap();
+        match default_cli.command {
+            Commands::Align(args) => assert_eq!(args.target_coverage, 50),
+            _ => panic!("Expected Align command"),
+        }
+
+        let configured_cli = Cli::try_parse_from([
+            "Ilesta",
+            "align",
+            "-r",
+            "reads.fq",
+            "--target-coverage",
+            "20",
+        ])
+        .unwrap();
+        match configured_cli.command {
+            Commands::Align(args) => assert_eq!(args.target_coverage, 20),
+            _ => panic!("Expected Align command"),
+        }
+    }
+
+    #[test]
+    fn test_minimap_batch_size_defaults_and_overrides() {
+        let default_align = Cli::try_parse_from(["Ilesta", "align", "-r", "reads.fq"]).unwrap();
+        match default_align.command {
+            Commands::Align(args) => assert_eq!(args.minimap_batch_size, "500M"),
+            _ => panic!("Expected Align command"),
+        }
+
+        let configured_assemble = Cli::try_parse_from([
+            "Ilesta",
+            "assemble",
+            "-r",
+            "reads.fq",
+            "--minimap-batch-size",
+            "100M",
+        ])
+        .unwrap();
+        match configured_assemble.command {
+            Commands::Assemble(args) => assert_eq!(args.minimap_batch_size, "100M"),
+            _ => panic!("Expected Assemble command"),
+        }
     }
 
     #[test]

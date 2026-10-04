@@ -125,6 +125,7 @@ fn run_minimap2(
     query: &std::path::Path,
     threads: usize,
     out_path: &std::path::Path,
+    batch_size: &str,
     read_type: crate::cli::ReadType,
 ) -> std::io::Result<()> {
     // time for debugging
@@ -137,10 +138,13 @@ fn run_minimap2(
     let mut child = cmd
         .arg("-t")
         .arg(&threads.to_string())
+        .arg("-K")
+        .arg(batch_size)
         .arg(query)
         .arg(query) // self-alignment
         .arg("-o")
         .arg(out_path)
+        // testing for reducing memory
         .spawn()?;
 
     let status = child.wait()?;
@@ -199,6 +203,7 @@ pub fn align_reads(
     min_base_quality: f32,
     input_genome_size: Option<u32>,
     target_coverage: u32,
+    minimap_batch_size: &str,
     read_type: crate::cli::ReadType,
 ) -> std::io::Result<AlignReadsResult> {
     println!("Computing read stats...");
@@ -230,7 +235,13 @@ pub fn align_reads(
 
             // align reads for genome size estimation
             println!("Running minimap2...");
-            run_minimap2(&subsampled_path, threads, output_paf, read_type)?;
+            run_minimap2(
+                &subsampled_path,
+                threads,
+                output_paf,
+                minimap_batch_size,
+                read_type,
+            )?;
             println!(
                 "Genome size estimation alignment finished. Alignments written to {}",
                 output_paf.display()
@@ -261,7 +272,13 @@ pub fn align_reads(
 
                 // align reads for genome size estimation
                 println!("Running minimap2...");
-                run_minimap2(&subsampled_path, threads, output_paf, read_type)?;
+                run_minimap2(
+                    &subsampled_path,
+                    threads,
+                    output_paf,
+                    minimap_batch_size,
+                    read_type,
+                )?;
                 println!(
                     "Genome size estimation alignment finished. Alignments written to {}",
                     output_paf.display()
@@ -288,7 +305,13 @@ pub fn align_reads(
         &stats,
         genome_size.saturating_mul(target_coverage),
     )?;
-    run_minimap2(&subsampled_output_path, threads, output_paf, read_type)?;
+    run_minimap2(
+        &subsampled_output_path,
+        threads,
+        output_paf,
+        minimap_batch_size,
+        read_type,
+    )?;
     println!(
         "Final alignment finished. Alignments written to {}",
         output_paf.display()

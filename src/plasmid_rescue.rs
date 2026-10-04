@@ -23,6 +23,7 @@ pub fn run_rescue_stage(
     read_type: crate::cli::ReadType,
     min_base_quality: f32,
     rescue_min_read_length: u32,
+    minimap_batch_size: &str,
 ) -> std::io::Result<RescueStats> {
     let generated_paf = output_dir.join("rescue_mapping.paf");
     let mapping_paf = if let Some(paf) = existing_mapping_paf {
@@ -59,12 +60,15 @@ pub fn run_rescue_stage(
     let assembly_dir = output_dir.join("rescue_assembly");
     std::fs::create_dir_all(&assembly_dir)?;
     let (_, improved_assembly_length) = fasta_stats(improved_assembly)?;
-    let rescue_bases_for_assembly =
-        rescue_assembly_base_target(stats.rescued_read_bases, improved_assembly_length, 10);
     let genome_size = improved_assembly_length.clamp(1, u32::MAX as u64) as u32;
+    let rescue_target_coverage =
+        rescue_target_coverage(stats.rescued_read_bases, improved_assembly_length);
+    let rescue_bases_for_assembly = improved_assembly_length
+        .saturating_mul(u64::from(rescue_target_coverage))
+        .min(stats.rescued_read_bases);
     println!(
-        "Rescue assembly target: 10× primary assembly length ({}) of {} unmapped bases",
-        rescue_bases_for_assembly, stats.rescued_read_bases
+        "Rescue assembly target: {}× primary assembly length ({} bases) to include all {} unmapped bases",
+        rescue_target_coverage, rescue_bases_for_assembly, stats.rescued_read_bases
     );
     let status = Command::new(std::env::current_exe()?)
         .arg("assemble")
@@ -79,6 +83,8 @@ pub fn run_rescue_stage(
         .arg(threads.clamp(1, 4).to_string())
         .arg("--read-type")
         .arg(read_type_name(read_type))
+        .arg("--minimap-batch-size")
+        .arg(minimap_batch_size)
         .arg("--min-read-length")
         .arg(rescue_min_read_length.to_string())
         .arg("--min-base-quality")
@@ -86,7 +92,7 @@ pub fn run_rescue_stage(
         .arg("--genome-size")
         .arg(genome_size.to_string())
         .arg("--target-coverage")
-        .arg("10")
+        .arg(rescue_target_coverage.to_string())
         .status()?;
     if !status.success() {
         return Err(std::io::Error::new(
@@ -100,12 +106,14 @@ pub fn run_rescue_stage(
     Ok(stats)
 }
 
-fn rescue_assembly_base_target(
-    rescued_bases: u64,
-    assembly_length: u64,
-    target_coverage: u32,
-) -> u64 {
-    rescued_bases.min(assembly_length.saturating_mul(u64::from(target_coverage)))
+fn rescue_target_coverage(rescued_bases: u64, assembly_length: u64) -> u32 {
+    if assembly_length == 0 {
+        return u32::MAX;
+    }
+    rescued_bases
+        .div_ceil(assembly_length)
+        .max(1)
+        .min(u32::MAX as u64) as u32
 }
 
 fn read_type_name(read_type: crate::cli::ReadType) -> &'static str {
@@ -205,7 +213,7 @@ fn fasta_stats(path: &Path) -> std::io::Result<(usize, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{mapped_read_names, rescue_assembly_base_target, write_rescue_reads};
+    use super::{mapped_read_names, rescue_target_coverage, write_rescue_reads};
     use std::fs;
     use std::path::PathBuf;
 
@@ -244,14 +252,9 @@ mod tests {
     }
 
     #[test]
-    fn limits_rescue_assembly_bases_relative_to_primary_assembly() {
-        assert_eq!(
-            rescue_assembly_base_target(410_000_000, 4_787_415, 10),
-            47_874_150
-        );
-        assert_eq!(
-            rescue_assembly_base_target(20_000_000, 4_787_415, 10),
-            20_000_000
-        );
+    fn rescue_coverage_budget_includes_all_rescued_bases() {
+        assert_eq!(rescue_target_coverage(381_937_170, 4_787_666), 80);
+        assert_eq!(rescue_target_coverage(20_000_000, 4_787_415), 5);
+        assert_eq!(rescue_target_coverage(100, 0), u32::MAX);
     }
 }
