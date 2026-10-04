@@ -33,13 +33,16 @@ pub fn run_rescue_stage(
     )?;
     let mapped_reads = mapped_read_names(&paf_path)?;
     let rescue_path = output_dir.join("rescue_reads.fq");
-    let stats = write_rescue_reads(filtered_reads, &rescue_path, &mapped_reads)?;
+    let mut stats = write_rescue_reads(filtered_reads, &rescue_path, &mapped_reads)?;
     println!("Reads considered for rescue: {}", stats.input_read_count);
     println!(
         "Reads mapped to primary assembly (excluded): {}",
         stats.mapped_read_count
     );
-    println!("Reads written to rescue_reads.fq: {}", stats.rescued_read_count);
+    println!(
+        "Reads written to rescue_reads.fq: {}",
+        stats.rescued_read_count
+    );
     println!("Rescue read bases: {}", stats.rescued_read_bases);
 
     if stats.rescued_read_count == 0 {
@@ -49,12 +52,19 @@ pub fn run_rescue_stage(
 
     let assembly_dir = output_dir.join("rescue_assembly");
     std::fs::create_dir_all(&assembly_dir)?;
-    let genome_size = stats
-        .rescued_read_bases
+    let (_, improved_assembly_length) = fasta_stats(improved_assembly)?;
+    let rescue_bases_for_assembly =
+        rescue_assembly_base_target(stats.rescued_read_bases, improved_assembly_length);
+    let genome_size = rescue_bases_for_assembly
         .div_ceil(50)
         .max(1)
         .min(u32::MAX as u64) as u32;
-    let output = Command::new(std::env::current_exe()?)
+    println!(
+        "Rescue assembly input target: {} of {} unmapped bases",
+        u64::from(genome_size).saturating_mul(50),
+        stats.rescued_read_bases
+    );
+    let status = Command::new(std::env::current_exe()?)
         .arg("assemble")
         .arg("--reads-fq")
         .arg(&rescue_path)
@@ -62,8 +72,9 @@ pub fn run_rescue_stage(
         .arg(&assembly_dir)
         .arg("--output-prefix")
         .arg("rescued")
+        .arg("--no-rescue-plasmids")
         .arg("--threads")
-        .arg(threads.to_string())
+        .arg(threads.clamp(1, 4).to_string())
         .arg("--read-type")
         .arg(read_type_name(read_type))
         .arg("--min-read-length")
@@ -72,22 +83,21 @@ pub fn run_rescue_stage(
         .arg(min_base_quality.to_string())
         .arg("--genome-size")
         .arg(genome_size.to_string())
-        .output()?;
-    if !output.status.success() {
+        .status()?;
+    if !status.success() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Other,
-            format!(
-                "rescue assembly subprocess failed with {}: {}{}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr),
-                String::from_utf8_lossy(&output.stdout)
-            ),
+            format!("rescue assembly subprocess failed with {status}"),
         ));
     }
 
     let rescued_fasta = assembly_dir.join("rescued.fa");
     (stats.rescued_unitig_count, stats.rescued_assembly_length) = fasta_stats(&rescued_fasta)?;
     Ok(stats)
+}
+
+fn rescue_assembly_base_target(rescued_bases: u64, assembly_length: u64) -> u64 {
+    rescued_bases.min(assembly_length.saturating_mul(10))
 }
 
 fn read_type_name(read_type: crate::cli::ReadType) -> &'static str {
@@ -187,12 +197,12 @@ fn fasta_stats(path: &Path) -> std::io::Result<(usize, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{mapped_read_names, write_rescue_reads};
+    use super::{mapped_read_names, rescue_assembly_base_target, write_rescue_reads};
     use std::fs;
     use std::path::PathBuf;
 
     #[test]
-    fn rescues_reads_below_half_aligned_fraction_and_unmapped_reads() {
+    fn rescues_only_reads_without_any_alignment() {
         let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join(format!("rescue_reads_test_{}", std::process::id()));
@@ -223,5 +233,17 @@ mod tests {
         assert!(!result.contains("@mapped_full"));
         assert!(!result.contains("@mapped_partial"));
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn limits_rescue_assembly_bases_relative_to_primary_assembly() {
+        assert_eq!(
+            rescue_assembly_base_target(410_000_000, 4_787_415),
+            47_874_150
+        );
+        assert_eq!(
+            rescue_assembly_base_target(20_000_000, 4_787_415),
+            20_000_000
+        );
     }
 }

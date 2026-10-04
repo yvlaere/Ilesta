@@ -63,7 +63,8 @@ This will produce:
 - `out_dir/unitigs.fa` (unitigs in FASTA format)
 - `out_dir/unitigs.gfa` (assembly graph in GFA format)
 - `out_dir/alignments.paf` (all-vs-all read alignments)
-- `out_dir/filtered.fq` (reads after filtering)
+- `out_dir/filtered_all.fq` (all reads after length and quality filtering)
+- `out_dir/filtered.fq` (reads selected for the primary assembly)
 - `out_dir/graph.dot` (overlap graph visualization)
 
 Ilesta performs an initial round of read filtering (default: --min-read-length 1000 --min-base-quality 10), followed by a second round of filtering where only the longest reads are kept untill a coverage of $\pm$ 50 is reached. Filtering settings can be changed or prefiltered reads can be provided.

@@ -23,6 +23,67 @@ pub fn open_fastq_reader(path: &Path) -> std::io::Result<Box<dyn BufRead>> {
     }
 }
 
+pub fn read_fastq_record<R: BufRead + ?Sized>(
+    reader: &mut R,
+) -> std::io::Result<Option<(String, String, String, String)>> {
+    fn read_line<R: BufRead + ?Sized>(reader: &mut R, line: &mut String) -> std::io::Result<bool> {
+        line.clear();
+        if reader.read_line(line)? == 0 {
+            return Ok(false);
+        }
+        while line.ends_with(['\n', '\r']) {
+            line.pop();
+        }
+        Ok(true)
+    }
+
+    let mut header = String::new();
+    if !read_line(reader, &mut header)? {
+        return Ok(None);
+    }
+    if !header.starts_with('@') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid FASTQ header: {header}"),
+        ));
+    }
+
+    let mut sequence = String::new();
+    let mut plus = String::new();
+    loop {
+        if !read_line(reader, &mut plus)? {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "FASTQ record is missing its plus line",
+            ));
+        }
+        if plus.starts_with('+') {
+            break;
+        }
+        sequence.push_str(&plus);
+    }
+
+    let mut quality = String::with_capacity(sequence.len());
+    let mut line = String::new();
+    while quality.len() < sequence.len() {
+        if !read_line(reader, &mut line)? {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "FASTQ record has fewer quality characters than sequence bases",
+            ));
+        }
+        quality.push_str(&line);
+    }
+    if quality.len() != sequence.len() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "FASTQ record has more quality characters than sequence bases",
+        ));
+    }
+
+    Ok(Some((header, sequence, plus, quality)))
+}
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 static SEED: AtomicU64 = AtomicU64::new(0);
@@ -141,4 +202,24 @@ pub fn rev_comp(seq: &str) -> String {
             _ => c,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_fastq_record;
+    use std::io::Cursor;
+
+    #[test]
+    fn reads_wrapped_sequence_and_quality_lines() {
+        let input = b"@read1 metadata\nACGT\nTGCA\n+read1\nIIII\n@@@@\n";
+        let mut reader = Cursor::new(input);
+
+        let record = read_fastq_record(&mut reader).unwrap().unwrap();
+
+        assert_eq!(record.0, "@read1 metadata");
+        assert_eq!(record.1, "ACGTTGCA");
+        assert_eq!(record.2, "+read1");
+        assert_eq!(record.3, "IIII@@@@");
+        assert!(read_fastq_record(&mut reader).unwrap().is_none());
+    }
 }

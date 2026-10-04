@@ -1,7 +1,7 @@
 reads_fq: evaluation/test_data/benchmark/Shigella_flexneri/nanopore.fastq.gz
 output_dir: evaluation/output
 
-threads: 4
+threads: 10
 paf: alignments.paf
 min_read_length: 1000
 min_base_quality: 10.0

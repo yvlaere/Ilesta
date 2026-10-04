@@ -33,6 +33,7 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
 
     let result = Command::new(env!("CARGO_BIN_EXE_Ilesta"))
         .arg("assemble")
+        .arg("--rescue-plasmids")
         .arg("--reads-fq")
         .arg(&sample_path)
         .arg("--output-dir")
@@ -59,6 +60,10 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("[M::mm_idx_gen"),
+        "rescue minimap2 diagnostics were not streamed to stderr"
+    );
     for artifact in [
         "filtered_all.fq",
         "filtered.fq",
@@ -84,6 +89,13 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
             .len()
             > 0,
         "assembler filtered out every sampled read"
+    );
+    assert!(output_dir.join("rescue_mapping.paf").is_file());
+    assert!(output_dir.join("rescue_reads.fq").is_file());
+    assert!(output_dir.join("rescue_assembly/rescued.fa").is_file());
+    assert!(
+        !output_dir.join("rescue_assembly/rescue_assembly").exists(),
+        "rescue assembly recursively started another rescue round"
     );
 
     fs::remove_dir_all(temp_dir).expect("remove smoke-test temporary directory");
