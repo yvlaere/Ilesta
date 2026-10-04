@@ -37,6 +37,7 @@ pub struct AssembleConfig {
     pub min_read_length: u32,
     pub min_base_quality: f32,
     pub genome_size: Option<u32>,
+    pub target_coverage: u32,
     pub read_type: ReadType,
 
     // alignment filtering

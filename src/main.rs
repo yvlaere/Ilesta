@@ -49,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.min_read_length,
                 config.min_base_quality,
                 config.genome_size,
+                config.target_coverage,
                 config.read_type,
             )?;
         }
@@ -98,6 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.min_read_length,
                 config.min_base_quality,
                 config.genome_size,
+                config.target_coverage,
                 config.read_type,
             )?;
             println!("Filtered read count: {}", reads.filtered_read_count);
@@ -231,6 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 graph.nodes.values().map(|n| n.edges.len()).sum::<usize>()
             );
 
+            let mut rescue_mapping_paf = None;
             if config.completion_enabled || config.rescue_plasmids {
                 println!("\n=== STARTING READ-GUIDED COMPLETION ===");
                 println!(
@@ -259,6 +262,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         config.threads,
                         config.read_type,
                     )?;
+                    rescue_mapping_paf = Some(completion_paf);
                     if completion.is_empty() {
                         println!("No completion bridges were added.");
                         break;
@@ -330,6 +334,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let stats = plasmid_rescue::run_rescue_stage(
                     &reads.filtered_reads,
                     &out_path,
+                    rescue_mapping_paf.as_deref(),
                     out_dir,
                     config.threads,
                     config.read_type,

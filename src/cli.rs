@@ -219,6 +219,14 @@ pub struct AssembleArgs {
     #[arg(long, help_heading = "Read filtering and alignment")]
     pub genome_size: Option<u32>,
 
+    /// Target read coverage for assembly input downsampling
+    #[arg(
+        long,
+        default_value_t = 50u32,
+        help_heading = "Read filtering and alignment"
+    )]
+    pub target_coverage: u32,
+
     /// Alignment filtering parameters (optional if --overlaps is provided)
 
     /// Minimum overlap length
@@ -324,6 +332,7 @@ impl From<&AssembleArgs> for crate::configs::AssembleConfig {
             min_read_length: args.min_read_length,
             min_base_quality: args.min_base_quality,
             genome_size: args.genome_size,
+            target_coverage: args.target_coverage,
             read_type: args.read_type,
 
             // alignment filtering

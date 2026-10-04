@@ -198,6 +198,7 @@ pub fn align_reads(
     min_read_length: u32,
     min_base_quality: f32,
     input_genome_size: Option<u32>,
+    target_coverage: u32,
     read_type: crate::cli::ReadType,
 ) -> std::io::Result<AlignReadsResult> {
     println!("Computing read stats...");
@@ -285,7 +286,7 @@ pub fn align_reads(
         &basic_filtering_path,
         &subsampled_output_path,
         &stats,
-        genome_size * 50,
+        genome_size.saturating_mul(target_coverage),
     )?;
     run_minimap2(&subsampled_output_path, threads, output_paf, read_type)?;
     println!(
