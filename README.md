@@ -71,7 +71,7 @@ Ilesta performs an initial round of read filtering (default: --min-read-length 1
 
 ```bash
 # Long read polishing
-minipolish filtered.fq out_dir/unitigs.gfa > polished.gfa
+minipolish filtered_all.fq out_dir/unitigs.gfa > polished.gfa
 
 # visualize the assembly graph
 Bandage image out_dir/unitigs.gfa out_dir/unitigs.png
