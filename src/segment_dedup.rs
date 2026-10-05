@@ -1,5 +1,5 @@
 use crate::compress_graph::CompressedGraph;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
@@ -61,7 +61,7 @@ pub fn remove_contained_segments(
 }
 
 fn contained_unitig_ids(reader: impl BufRead) -> io::Result<HashSet<usize>> {
-    let mut contained = HashSet::new();
+    let mut alignments: HashMap<(String, String), QueryAlignments> = HashMap::new();
     for line in reader.lines() {
         let line = line?;
         let fields: Vec<_> = line.split('\t').collect();
@@ -76,30 +76,70 @@ fn contained_unitig_ids(reader: impl BufRead) -> io::Result<HashSet<usize>> {
         let query_start = parse_paf_number(fields[2])?;
         let query_end = parse_paf_number(fields[3])?;
         let target_length = parse_paf_number(fields[6])?;
-        let matching_bases = parse_paf_number(fields[9])?;
-        let alignment_block_length = parse_paf_number(fields[10])?;
 
         if fields[0] == fields[5]
-            || target_length < query_length
-            || (target_length == query_length && fields[5] >= fields[0])
             || query_length == 0
-            || alignment_block_length == 0
+            || query_start > query_end
+            || query_end > query_length
         {
             continue;
         }
 
-        let query_coverage = (query_end - query_start) as f64 / query_length as f64;
-        let identity = matching_bases as f64 / alignment_block_length as f64;
-        if query_coverage > 0.95 && identity > 0.99 {
-            if let Some(id) = fields[0]
-                .strip_prefix("unitig_")
-                .and_then(|name| name.parse().ok())
-            {
-                contained.insert(id);
-            }
+        let key = (fields[0].to_string(), fields[5].to_string());
+        let alignment = alignments.entry(key).or_insert_with(|| QueryAlignments {
+            query_length,
+            target_length,
+            intervals: Vec::new(),
+        });
+        alignment.intervals.push((query_start, query_end));
+    }
+
+    let mut contained = HashSet::new();
+    for ((query_name, target_name), mut alignment) in alignments {
+        if alignment.target_length < alignment.query_length
+            || (alignment.target_length == alignment.query_length && target_name >= query_name)
+            || covered_query_fraction(&mut alignment.intervals, alignment.query_length) <= 0.95
+        {
+            continue;
+        }
+        if let Some(id) = query_name
+            .strip_prefix("unitig_")
+            .and_then(|name| name.parse().ok())
+        {
+            contained.insert(id);
         }
     }
     Ok(contained)
+}
+
+struct QueryAlignments {
+    query_length: u64,
+    target_length: u64,
+    intervals: Vec<(u64, u64)>,
+}
+
+fn covered_query_fraction(intervals: &mut [(u64, u64)], query_length: u64) -> f64 {
+    intervals.sort_unstable();
+    let mut covered = 0;
+    let mut current: Option<(u64, u64)> = None;
+
+    for &(start, end) in intervals.iter() {
+        match current {
+            Some((current_start, current_end)) if start <= current_end => {
+                current = Some((current_start, current_end.max(end)));
+            }
+            Some((current_start, current_end)) => {
+                covered += current_end - current_start;
+                current = Some((start, end));
+            }
+            None => current = Some((start, end)),
+        }
+    }
+    if let Some((start, end)) = current {
+        covered += end - start;
+    }
+
+    covered as f64 / query_length as f64
 }
 
 fn parse_paf_number(value: &str) -> io::Result<u64> {
@@ -117,7 +157,7 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
-    fn removes_only_shorter_segments_passing_both_strict_thresholds() {
+    fn removes_only_shorter_segments_passing_query_coverage_threshold() {
         let paf = concat!(
             "unitig_1\t100\t0\t96\t+\tunitig_2\t200\t20\t116\t96\t96\t60\n",
             "unitig_3\t100\t0\t95\t+\tunitig_4\t200\t20\t115\t95\t95\t60\n",
@@ -130,6 +170,20 @@ mod tests {
 
         let contained = contained_unitig_ids(Cursor::new(paf)).unwrap();
 
-        assert_eq!(contained, [1, 11].into_iter().collect());
+        assert_eq!(contained, [1, 5, 11].into_iter().collect());
+    }
+
+    #[test]
+    fn combines_non_overlapping_query_alignments_but_not_different_targets() {
+        let paf = concat!(
+            "unitig_20\t100\t0\t50\t+\tunitig_21\t200\t0\t50\t50\t50\t60\n",
+            "unitig_20\t100\t50\t100\t-\tunitig_21\t200\t50\t100\t50\t50\t60\n",
+            "unitig_22\t100\t0\t50\t+\tunitig_23\t200\t0\t50\t50\t50\t60\n",
+            "unitig_22\t100\t50\t100\t+\tunitig_24\t200\t0\t50\t50\t50\t60\n",
+        );
+
+        let contained = contained_unitig_ids(Cursor::new(paf)).unwrap();
+
+        assert_eq!(contained, [20].into_iter().collect());
     }
 }
