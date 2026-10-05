@@ -119,7 +119,10 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
             .rsplit_once('_')
             .expect("GFA segment name includes topology");
         assert!(fasta_names.contains(fasta_name));
-        assert_eq!(fasta_topologies.get(fasta_name).copied(), Some(gfa_topology));
+        assert_eq!(
+            fasta_topologies.get(fasta_name).copied(),
+            Some(gfa_topology)
+        );
     }
     let stdout = String::from_utf8_lossy(&result.stdout);
     let rescued_unitig_count = stdout

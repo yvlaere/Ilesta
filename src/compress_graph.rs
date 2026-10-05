@@ -37,10 +37,7 @@ pub struct CompressedGraph {
 }
 
 impl CompressedGraph {
-    pub fn write_gfa(
-        &mut self,
-        path: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn write_gfa(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut file = std::fs::File::create(path)?;
         use std::io::Write;
         // header
@@ -126,10 +123,7 @@ impl CompressedGraph {
     }
 }
 
-fn set_unitig_topologies(
-    unitigs: &mut [Unitig],
-    overlaps: &HashMap<(usize, usize), Overlap>,
-) {
+fn set_unitig_topologies(unitigs: &mut [Unitig], overlaps: &HashMap<(usize, usize), Overlap>) {
     for unitig in unitigs {
         if unitig.members.len() <= 1 {
             continue;

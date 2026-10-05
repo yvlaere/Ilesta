@@ -320,13 +320,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // compress into unitigs into output dir
             let out_path = out_dir.join(format!("{}.fa", config.output_prefix));
             let primary_unitig_count = {
-                let primary_compressed =
-                    compress_graph::compress_unitigs(
-                        &graph,
-                        &overlaps,
-                        &reads.primary_reads,
-                        &out_path,
-                    );
+                let primary_compressed = compress_graph::compress_unitigs(
+                    &graph,
+                    &overlaps,
+                    &reads.primary_reads,
+                    &out_path,
+                );
                 primary_compressed.unitigs.len()
             };
             println!(
@@ -366,7 +365,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             println!("\n=== WRITING COMBINED ASSEMBLY ===");
-            let mut compressed =
+            let compressed =
                 compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads, &out_path);
             if assembly_reads != reads.primary_reads {
                 std::fs::remove_file(&assembly_reads)?;
@@ -491,12 +490,10 @@ mod tests {
                 heuristic_simplification::remove_short_edges(&mut graph, 0.8);
                 bubble_removal::remove_bubbles(&mut graph, 100, 1.1);
                 graph.write_dot(&dot_path).unwrap();
-                let mut compressed =
+                let compressed =
                     compress_graph::compress_unitigs(&graph, &overlaps, &fastq_path, &fasta_path);
                 assert!(compressed.edges.len() >= 2);
-                compressed
-                    .write_gfa(gfa_path.to_str().unwrap())
-                    .unwrap();
+                compressed.write_gfa(gfa_path.to_str().unwrap()).unwrap();
                 let result = (
                     snapshot,
                     overlap_bytes,
