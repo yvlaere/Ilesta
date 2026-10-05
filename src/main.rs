@@ -9,6 +9,7 @@ mod graph_analysis;
 mod heuristic_simplification;
 mod iterative_completion;
 mod plasmid_rescue;
+mod segment_dedup;
 mod tip_trimming;
 mod transitive_edge_reduction;
 mod utils;
@@ -365,8 +366,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             println!("\n=== WRITING COMBINED ASSEMBLY ===");
-            let compressed =
+            let mut compressed =
                 compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads, &out_path);
+            let removed_segments = segment_dedup::remove_contained_segments(
+                &mut compressed,
+                &out_path,
+                out_dir,
+                config.threads,
+            )?;
+            println!("Removed {} contained assembly segments", removed_segments);
             if assembly_reads != reads.primary_reads {
                 std::fs::remove_file(&assembly_reads)?;
             }
