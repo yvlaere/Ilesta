@@ -34,7 +34,7 @@ impl ReadType {
 #[derive(Parser)]
 #[command(
     name = "Ilesta",
-    version = "1.2.1",
+    version,
     about = "De novo genome assembly for long reads using an overlap graph"
 )]
 pub struct Cli {

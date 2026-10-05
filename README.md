@@ -6,14 +6,14 @@ Ilesta is a de novo genome assembler for long reads. It processes all-vs-all ali
 
 ## Installation
 
-Ilesta uses [minimap2](https://github.com/lh3/minimap2) for alignment and requires it to be on the PATH.
+Ilesta uses [minimap2](https://github.com/lh3/minimap2) for alignment. The Bioconda package installs it automatically. For other installation methods, minimap2 must be available on the PATH.
 
 Option 1: Bioconda (recommended)
 
 ```bash
 conda create -n Ilesta_env
 conda activate Ilesta_env
-conda install -c bioconda ilesta minimap2
+conda install -c bioconda ilesta
 ```
 
 Option 2: Precompiled binaries:
@@ -21,7 +21,7 @@ Option 2: Precompiled binaries:
 ```bash
 # Download the binary
 mkdir Ilesta; cd Ilesta
-wget https://github.com/yvlaere/Ilesta/releases/download/v1.2.0/ilesta-linux-x86_64
+wget https://github.com/yvlaere/Ilesta/releases/download/v1.3.0/ilesta-linux-x86_64
 chmod +x ilesta-linux-x86_64
 mv ilesta-linux-x86_64 Ilesta
 
@@ -60,18 +60,28 @@ traversal; nonzero seeds use a deterministic shuffle of sorted traversal keys.
 Without a seed, traversal order remains unspecified. FASTQ input may also be gzip-compressed.
 
 This will produce:
-- `out_dir/unitigs.fa` (unitigs in FASTA format)
-- `out_dir/unitigs.gfa` (assembly graph in GFA format)
-- `out_dir/alignments.paf` (all-vs-all read alignments)
-- `out_dir/filtered_all.fq` (all reads after length and quality filtering)
-- `out_dir/filtered.fq` (reads selected for the primary assembly)
-- `out_dir/graph.dot` (overlap graph visualization)
+
+```text
+out_dir/
+├── alignments.paf
+├── assembly_containment.paf
+├── filtered_all.fq
+├── filtered.fq
+├── graph.dot
+├── rescue_graph/
+├── rescue_reads.fq
+├── unitigs.completion.paf
+├── unitigs.fa
+├── unitigs.first_pass.fa
+├── unitigs.gfa
+└── unitigs.overlaps.bin
+```
 
 Ilesta performs an initial round of read filtering (default: --min-read-length 1000 --min-base-quality 10), followed by a second round of filtering where only the longest reads are kept untill a coverage of $\pm$ 50 is reached. Filtering settings can be changed or prefiltered reads can be provided.
 
 ```bash
 # Long read polishing
-minipolish filtered_all.fq out_dir/unitigs.gfa > polished.gfa
+minipolish out_dir/filtered_all.fq out_dir/unitigs.gfa > polished.gfa
 
 # visualize the assembly graph
 Bandage image out_dir/unitigs.gfa out_dir/unitigs.png
@@ -79,16 +89,13 @@ Bandage image out_dir/unitigs.gfa out_dir/unitigs.png
 Ilesta sucesfully assembles the whole bacterial chromosome as one unitig. The smaller unitigs are plasmids. 
 ![Bandage visualization](image.png)
 
-```bash
-# visualize the overlap graph (not recommended, the graph is usually too large for convenient visualization)
-dot -Tpng out_dir/graph.dot -o out_dir/graph.png
-```
-
 ## Command Line Usage
 
-```
+```bash
 Ilesta --help
+```
 
+```text
 Usage: Ilesta <COMMAND>
 
 Commands:
@@ -101,59 +108,69 @@ Options:
   -h, --help     Print help
   -V, --version  Print version
 ```
-```
-Ilesta assemble --help
 
+```bash
+Ilesta assemble --help
+```
+
+```text
 Usage: Ilesta assemble [OPTIONS] --reads-fq <READS_FQ>
 
 Options:
   -h, --help  Print help
 
 Output:
-  -p, --output-prefix <OUTPUT_PREFIX>  Output parameters Output prefix [default: unitigs]
+  -p, --output-prefix <OUTPUT_PREFIX>  Output prefix [default: unitigs]
   -o, --output-dir <OUTPUT_DIR>        Output directory [default: .]
 
 Read filtering and alignment:
-  -r, --reads-fq <READS_FQ>
-          Read filtering and alignment parameters Input reads in FASTQ format
-      --read-type <READ_TYPE>
-          Read type / sequencing technology (ont, pb-clr, pb-hifi) [default: ont] [possible values: ont, pb-clr, pb-hifi]
-  -t, --threads <THREADS>
-          Number of threads [default: 4]
-  -a, --paf <PAF>
-          Output PAF filename [default: alignments.paf]
+  -r, --reads-fq <READS_FQ>            Input reads in FASTQ format
+      --read-type <READ_TYPE>          [default: ont] [possible values: ont, pb-clr, pb-hifi]
+  -t, --threads <THREADS>              Number of threads [default: 4]
+  -a, --paf <PAF>                      Output PAF filename [default: alignments.paf]
       --min-read-length <MIN_READ_LENGTH>
-          Minimum read length [default: 1000]
+                                       Minimum read length [default: 1000]
   -q, --min-base-quality <MIN_BASE_QUALITY>
-          Minimum average quality [default: 10]
-      --genome-size <GENOME_SIZE>
-          Optional input genome size (if not provided, will be estimated from data)
+                                       Minimum average quality [default: 10]
+      --genome-size <GENOME_SIZE>      Genome size (estimated if omitted)
+      --target-coverage <TARGET_COVERAGE>
+                                       Target read coverage [default: 50]
+      --minimap-batch-size <MINIMAP_BATCH_SIZE>
+                                       Minimap2 query minibatch size [default: 500M]
+      --minimap2-f <MINIMAP2_F>        Override minimap2's -f option
+      --minimap2-u <MINIMAP2_U>        Override minimap2's -U option
 
 Alignment filtering:
   -l, --min-overlap-length <MIN_OVERLAP_LENGTH>
-          Alignment filtering parameters (optional if --overlaps is provided) Minimum overlap length [default: 2000]
+                                       Minimum overlap length [default: 2000]
   -c, --min-overlap-count <MIN_OVERLAP_COUNT>
-          Minimum overlap count [default: 3]
+                                       Minimum overlap count [default: 3]
   -i, --min-percent-identity <MIN_PERCENT_IDENTITY>
-          Minimum percent identity [default: 5]
+                                       Minimum percent identity [default: 5]
       --overhang-ratio <OVERHANG_RATIO>
-          Overhang ratio [default: 0.8]
-      --overlaps <OVERLAPS>
-          Pre-computed overlaps binary file (optional, if provided skips alignment filtering)
+                                       Overhang ratio [default: 0.8]
+      --overlaps <OVERLAPS>            Pre-computed overlaps file (skips alignment filtering)
 
 Assembly:
       --max-bubble-length <MAX_BUBBLE_LENGTH>
-          Assembly parameters Maximum bubble length (used during bubble removal) [default: 100]
+                                       Maximum bubble length [default: 100]
       --min-support-ratio <MIN_SUPPORT_RATIO>
-          Minimum support ratio for bubble removal [default: 1.1]
-      --max-tip-len <MAX_TIP_LEN>
-          Maximum tip length for tip trimming [default: 4]
-      --fuzz <FUZZ>
-          Fuzz parameter for transitive edge reduction [default: 10]
+                                       Minimum support ratio [default: 1.1]
+      --max-tip-len <MAX_TIP_LEN>      Maximum tip length [default: 4]
+      --fuzz <FUZZ>                    Fuzz parameter [default: 10]
       --cleanup-iterations <CLEANUP_ITERATIONS>
-          Number of cleanup iterations to run [default: 3]
+                                       Cleanup iterations [default: 3]
       --short-edge-ratio <SHORT_EDGE_RATIO>
-          Short edge removal ratio (heuristic simplification) [default: 0.8]
+                                       Short edge ratio [default: 0.8]
+      --completion-enabled             Enable read-guided completion
+      --completion-rounds <COMPLETION_ROUNDS>
+                                       Completion rounds [default: 1]
+      --completion-min-alignment-len <COMPLETION_MIN_ALIGNMENT_LEN>
+                                       Minimum completion alignment length [default: 2000]
+      --completion-min-identity <COMPLETION_MIN_IDENTITY>
+                                       Minimum completion identity [default: 0.8]
+      --rescue-plasmids                 Rescue poorly represented reads as plasmids (enabled by default)
+      --seed <SEED>                    Optional random seed
 ```
 
 ## Development

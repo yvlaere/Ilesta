@@ -191,6 +191,10 @@ fn parse_paf_bridges(
         b.support_reads
             .cmp(&a.support_reads)
             .then_with(|| b.edge_len.cmp(&a.edge_len))
+            .then_with(|| a.from_node.cmp(&b.from_node))
+            .then_with(|| a.from_orientation.cmp(&b.from_orientation))
+            .then_with(|| a.to_node.cmp(&b.to_node))
+            .then_with(|| a.to_orientation.cmp(&b.to_orientation))
     });
     Ok(bridges)
 }
@@ -390,6 +394,31 @@ mod tests {
         assert_eq!(bridges[0].to_node, "unitig_1");
         assert_eq!(bridges[0].edge_len, 850);
 
+        let _ = fs::remove_file(tmp);
+    }
+
+    #[test]
+    fn orders_equally_supported_bridges_by_endpoints() {
+        let mut tmp = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        tmp.push("target");
+        tmp.push("tmp_completion_test_ties.paf");
+        let paf = concat!(
+            "read1\t1200\t0\t600\t+\tunitig_b\t800\t0\t600\t580\t600\t60\n",
+            "read1\t1200\t600\t1200\t+\tunitig_c\t800\t0\t600\t580\t600\t60\n",
+            "read2\t1200\t0\t600\t+\tunitig_b\t800\t0\t600\t580\t600\t60\n",
+            "read2\t1200\t600\t1200\t+\tunitig_c\t800\t0\t600\t580\t600\t60\n",
+            "read3\t1200\t0\t600\t+\tunitig_a\t800\t0\t600\t580\t600\t60\n",
+            "read3\t1200\t600\t1200\t+\tunitig_d\t800\t0\t600\t580\t600\t60\n",
+            "read4\t1200\t0\t600\t+\tunitig_a\t800\t0\t600\t580\t600\t60\n",
+            "read4\t1200\t600\t1200\t+\tunitig_d\t800\t0\t600\t580\t600\t60\n"
+        );
+        fs::write(&tmp, paf).unwrap();
+
+        let bridges = parse_paf_bridges(&tmp, 500, 0.8).unwrap();
+
+        assert_eq!(bridges.len(), 2);
+        assert_eq!(bridges[0].from_node, "unitig_a");
+        assert_eq!(bridges[1].from_node, "unitig_b");
         let _ = fs::remove_file(tmp);
     }
 
