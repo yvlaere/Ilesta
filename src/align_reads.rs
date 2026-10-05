@@ -126,6 +126,8 @@ fn run_minimap2(
     threads: usize,
     out_path: &std::path::Path,
     batch_size: &str,
+    minimap2_f: Option<&str>,
+    minimap2_u: Option<&str>,
     read_type: crate::cli::ReadType,
 ) -> std::io::Result<()> {
     // time for debugging
@@ -134,6 +136,12 @@ fn run_minimap2(
     let mut cmd = Command::new("minimap2");
     for arg in read_type.minimap2_args() {
         cmd.arg(arg);
+    }
+    if let Some(value) = minimap2_f {
+        cmd.arg("-f").arg(value);
+    }
+    if let Some(value) = minimap2_u {
+        cmd.arg("-U").arg(value);
     }
     let mut child = cmd
         .arg("-t")
@@ -204,6 +212,8 @@ pub fn align_reads(
     input_genome_size: Option<u32>,
     target_coverage: u32,
     minimap_batch_size: &str,
+    minimap2_f: Option<&str>,
+    minimap2_u: Option<&str>,
     read_type: crate::cli::ReadType,
 ) -> std::io::Result<AlignReadsResult> {
     println!("Computing read stats...");
@@ -240,6 +250,8 @@ pub fn align_reads(
                 threads,
                 output_paf,
                 minimap_batch_size,
+                minimap2_f,
+                minimap2_u,
                 read_type,
             )?;
             println!(
@@ -277,6 +289,8 @@ pub fn align_reads(
                     threads,
                     output_paf,
                     minimap_batch_size,
+                    minimap2_f,
+                    minimap2_u,
                     read_type,
                 )?;
                 println!(
@@ -310,6 +324,8 @@ pub fn align_reads(
         threads,
         output_paf,
         minimap_batch_size,
+        minimap2_f,
+        minimap2_u,
         read_type,
     )?;
     println!(

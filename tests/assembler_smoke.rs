@@ -64,6 +64,9 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
         String::from_utf8_lossy(&result.stderr).contains("[M::mm_idx_gen"),
         "rescue minimap2 diagnostics were not streamed to stderr"
     );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("-f 0.001"));
+    assert!(stderr.contains("-U 10,5000"));
     for artifact in [
         "filtered_all.fq",
         "filtered.fq",
@@ -83,6 +86,53 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
         unitigs.lines().any(|line| line.starts_with(">unitig_")),
         "assembler completed without producing a unitig"
     );
+    let fasta_names: std::collections::HashSet<_> = unitigs
+        .lines()
+        .filter(|line| line.starts_with('>'))
+        .filter_map(|line| line[1..].split_whitespace().next())
+        .collect();
+    let fasta_topologies: std::collections::HashMap<_, _> = unitigs
+        .lines()
+        .filter(|line| line.starts_with('>'))
+        .filter_map(|line| {
+            let mut fields = line[1..].split_whitespace();
+            let name = fields.next()?;
+            let topology = fields.find_map(|field| field.strip_prefix("topology="))?;
+            Some((name, topology))
+        })
+        .collect();
+    let gfa = fs::read_to_string(output_dir.join("unitigs.gfa")).expect("read combined GFA");
+    let gfa_names: Vec<_> = gfa
+        .lines()
+        .filter(|line| line.starts_with("S\t"))
+        .filter_map(|line| line.split('\t').nth(1))
+        .collect();
+    let unique_gfa_names: std::collections::HashSet<_> = gfa_names.iter().copied().collect();
+    assert_eq!(
+        gfa_names.len(),
+        unique_gfa_names.len(),
+        "GFA segment names repeat"
+    );
+    assert_eq!(fasta_names.len(), gfa_names.len());
+    for gfa_name in gfa_names {
+        let (fasta_name, gfa_topology) = gfa_name
+            .rsplit_once('_')
+            .expect("GFA segment name includes topology");
+        assert!(fasta_names.contains(fasta_name));
+        assert_eq!(fasta_topologies.get(fasta_name).copied(), Some(gfa_topology));
+    }
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let rescued_unitig_count = stdout
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Rescued unitig count: ")
+                .and_then(|count| count.parse::<usize>().ok())
+        })
+        .expect("rescue unitig count was not reported");
+    assert!(
+        rescued_unitig_count > 0,
+        "no rescued unitigs reached the combined assembly"
+    );
     assert!(
         fs::metadata(output_dir.join("filtered_all.fq"))
             .expect("read filtered FASTQ metadata")
@@ -96,10 +146,11 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
         "rescue unexpectedly repeated the read-to-unitig mapping"
     );
     assert!(output_dir.join("rescue_reads.fq").is_file());
-    assert!(output_dir.join("rescue_assembly/rescued.fa").is_file());
+    assert!(!output_dir.join("rescue_graph/rescue.fa").exists());
+    assert!(!output_dir.join("rescue_graph/rescue.gfa").exists());
     assert!(
-        !output_dir.join("rescue_assembly/rescue_assembly").exists(),
-        "rescue assembly recursively started another rescue round"
+        !output_dir.join("rescue_graph/rescue_graph").exists(),
+        "rescue graph recursively started another rescue round"
     );
 
     fs::remove_dir_all(temp_dir).expect("remove smoke-test temporary directory");

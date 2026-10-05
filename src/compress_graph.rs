@@ -40,37 +40,11 @@ impl CompressedGraph {
     pub fn write_gfa(
         &mut self,
         path: &str,
-        overlaps: &HashMap<(usize, usize), Overlap>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut file = std::fs::File::create(path)?;
         use std::io::Write;
         // header
         writeln!(file, "H\tVN:Z:1.0")?;
-
-        // determine if unitigs are circular
-        for u in &mut self.unitigs {
-            if u.members.len() > 1 {
-                let first = &u.members[0].node_id;
-                let last_edge = &u.members[u.members.len() - 1].edge;
-                let last = &last_edge.0;
-
-                // If last edge points back to first node, and not already in edge_set
-                if !last.is_empty() && last == first {
-                    u.topology = 'c';
-                }
-
-                // if there is an overlap between the first and last node, that also indicates circularity
-                for ((_q, _t), o) in overlaps.iter() {
-                    if (o.source_name == *first && o.sink_name == *last)
-                        || (o.source_name == *last && o.sink_name == *first)
-                        || (o.rc_source_name == *first && o.rc_sink_name == *last)
-                        || (o.rc_source_name == *last && o.rc_sink_name == *first)
-                    {
-                        u.topology = 'c';
-                    }
-                }
-            }
-        }
 
         // segments
         for u in &self.unitigs {
@@ -152,6 +126,34 @@ impl CompressedGraph {
     }
 }
 
+fn set_unitig_topologies(
+    unitigs: &mut [Unitig],
+    overlaps: &HashMap<(usize, usize), Overlap>,
+) {
+    for unitig in unitigs {
+        if unitig.members.len() <= 1 {
+            continue;
+        }
+
+        let first = &unitig.members[0].node_id;
+        let last = &unitig.members[unitig.members.len() - 1].edge.0;
+        if !last.is_empty() && last == first {
+            unitig.topology = 'c';
+        }
+
+        for overlap in overlaps.values() {
+            if (overlap.source_name == *first && overlap.sink_name == *last)
+                || (overlap.source_name == *last && overlap.sink_name == *first)
+                || (overlap.rc_source_name == *first && overlap.rc_sink_name == *last)
+                || (overlap.rc_source_name == *last && overlap.rc_sink_name == *first)
+            {
+                unitig.topology = 'c';
+                break;
+            }
+        }
+    }
+}
+
 // helper function to parse the node_id format "read_name:start-end+/-" and extract the read_name and orientation
 fn parse_node_id(node_id: &str) -> Result<(&str, u32, u32, char), String> {
     let ori = node_id
@@ -195,6 +197,7 @@ fn parse_node_id(node_id: &str) -> Result<(&str, u32, u32, char), String> {
 /// Preserves member lists and the overlap lengths between them.
 pub fn compress_unitigs(
     graph: &OverlapGraph,
+    overlaps: &HashMap<(usize, usize), Overlap>,
     fastq_path: &std::path::PathBuf,
     fasta_path: &std::path::Path,
 ) -> CompressedGraph {
@@ -491,6 +494,7 @@ pub fn compress_unitigs(
         let seq = unitig_sequence(unitig, graph, fastq_seqs.clone()).unwrap();
         unitig.fasta_seq = Some(seq);
     }
+    set_unitig_topologies(&mut unitigs, overlaps);
 
     // write to fasta file
     {

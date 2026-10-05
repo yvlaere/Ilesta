@@ -95,6 +95,14 @@ pub struct AlignReadsArgs {
     /// Minimap2 query minibatch size for self-alignment (e.g. 500M)
     #[arg(long, default_value = "500M")]
     pub minimap_batch_size: String,
+
+    /// Override minimap2's -f high-frequency minimizer filter
+    #[arg(long)]
+    pub minimap2_f: Option<String>,
+
+    /// Override minimap2's -U minimizer occurrence bounds
+    #[arg(long)]
+    pub minimap2_u: Option<String>,
 }
 
 impl From<&AlignReadsArgs> for crate::configs::AlignReadsConfig {
@@ -109,6 +117,8 @@ impl From<&AlignReadsArgs> for crate::configs::AlignReadsConfig {
             genome_size: args.genome_size,
             target_coverage: args.target_coverage,
             minimap_batch_size: args.minimap_batch_size.clone(),
+            minimap2_f: args.minimap2_f.clone(),
+            minimap2_u: args.minimap2_u.clone(),
             read_type: args.read_type,
         }
     }
@@ -245,6 +255,14 @@ pub struct AssembleArgs {
     )]
     pub minimap_batch_size: String,
 
+    /// Override minimap2's -f high-frequency minimizer filter
+    #[arg(long, help_heading = "Read filtering and alignment")]
+    pub minimap2_f: Option<String>,
+
+    /// Override minimap2's -U minimizer occurrence bounds
+    #[arg(long, help_heading = "Read filtering and alignment")]
+    pub minimap2_u: Option<String>,
+
     /// Alignment filtering parameters (optional if --overlaps is provided)
 
     /// Minimum overlap length
@@ -352,6 +370,8 @@ impl From<&AssembleArgs> for crate::configs::AssembleConfig {
             genome_size: args.genome_size,
             target_coverage: args.target_coverage,
             minimap_batch_size: args.minimap_batch_size.clone(),
+            minimap2_f: args.minimap2_f.clone(),
+            minimap2_u: args.minimap2_u.clone(),
             read_type: args.read_type,
 
             // alignment filtering

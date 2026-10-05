@@ -51,6 +51,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.genome_size,
                 config.target_coverage,
                 &config.minimap_batch_size,
+                config.minimap2_f.as_deref(),
+                config.minimap2_u.as_deref(),
                 config.read_type,
             )?;
         }
@@ -102,6 +104,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.genome_size,
                 config.target_coverage,
                 &config.minimap_batch_size,
+                config.minimap2_f.as_deref(),
+                config.minimap2_u.as_deref(),
                 config.read_type,
             )?;
             println!("Filtered read count: {}", reads.filtered_read_count);
@@ -118,8 +122,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 overlaps_file.clone()
             } else {
                 // Run alignment filtering
-                let input_paf = config.paf;
-
                 // write overlaps into the output directory using the chosen prefix
                 let overlaps_path = out_dir.join(format!("{}.overlaps.bin", config.output_prefix));
                 let overlaps_path_str = overlaps_path
@@ -142,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // load overlaps, build graph
             let file = File::open(&overlaps_path_str)?;
             let reader = BufReader::new(file);
-            let overlaps: HashMap<(usize, usize), Overlap> = bincode::deserialize_from(reader)?;
+            let mut overlaps: HashMap<(usize, usize), Overlap> = bincode::deserialize_from(reader)?;
             let mut graph = create_overlap_graph::run_create_overlap_graph(&overlaps)?;
 
             // Graph simplification: iterative cleanup
@@ -249,6 +251,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         out_dir.join(format!("{}.first_pass.fa", config.output_prefix));
                     let initial_compressed = compress_graph::compress_unitigs(
                         &graph,
+                        &overlaps,
                         &reads.primary_reads,
                         &first_pass_unitigs_path,
                     );
@@ -316,8 +319,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("\n=== COMPRESSING UNITIGS AND WRITING OUTPUT ===");
             // compress into unitigs into output dir
             let out_path = out_dir.join(format!("{}.fa", config.output_prefix));
+            let primary_unitig_count = {
+                let primary_compressed =
+                    compress_graph::compress_unitigs(
+                        &graph,
+                        &overlaps,
+                        &reads.primary_reads,
+                        &out_path,
+                    );
+                primary_compressed.unitigs.len()
+            };
+            println!(
+                "Primary assembly produced {} unitigs (written to {})",
+                primary_unitig_count,
+                out_path.display()
+            );
+
+            let mut rescued_node_ids = HashSet::new();
+            let mut assembly_reads = reads.primary_reads.clone();
+            let mut rescue_stats = None;
+            if config.rescue_plasmids {
+                println!("\n=== STARTING PLASMID RESCUE ===");
+                let stats = plasmid_rescue::run_rescue_stage(
+                    &reads.filtered_reads,
+                    &out_path,
+                    rescue_mapping_paf.as_deref(),
+                    out_dir,
+                    &config,
+                    &mut graph,
+                    &mut overlaps,
+                )?;
+                rescued_node_ids = stats.rescued_node_ids.clone();
+                if let Some(rescue_reads) = &stats.rescue_primary_reads {
+                    let combined_reads =
+                        out_dir.join(format!("{}.combined.fq", config.output_prefix));
+                    let mut combined_file = File::create(&combined_reads)?;
+                    std::io::copy(&mut File::open(&reads.primary_reads)?, &mut combined_file)?;
+                    std::io::copy(&mut File::open(rescue_reads)?, &mut combined_file)?;
+                    assembly_reads = combined_reads;
+                }
+                println!("Rescued read count: {}", stats.rescued_read_count);
+                println!("Rescued read bases: {}", stats.rescued_read_bases);
+                println!("Rescued graph node count: {}", stats.rescued_node_ids.len());
+                println!("=== PLASMID RESCUE COMPLETE ===");
+                rescue_stats = Some(stats);
+            }
+
+            println!("\n=== WRITING COMBINED ASSEMBLY ===");
             let mut compressed =
-                compress_graph::compress_unitigs(&graph, &reads.primary_reads, &out_path);
+                compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads, &out_path);
+            if assembly_reads != reads.primary_reads {
+                std::fs::remove_file(&assembly_reads)?;
+            }
             println!(
                 "Assembly produced {} unitigs (written to {})",
                 compressed.unitigs.len(),
@@ -325,30 +378,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             let gfa_path = out_dir.join(format!("{}.gfa", config.output_prefix));
             let gfa_str = gfa_path.to_str().ok_or("invalid output path")?;
-            compressed.write_gfa(gfa_str, &overlaps)?;
+            compressed.write_gfa(gfa_str)?;
             println!("Wrote GFA to {}", gfa_str);
-
-            if config.rescue_plasmids {
-                println!("\n=== STARTING PLASMID RESCUE ===");
-                drop(compressed);
-                drop(graph);
-                drop(overlaps);
-                let stats = plasmid_rescue::run_rescue_stage(
-                    &reads.filtered_reads,
-                    &out_path,
-                    rescue_mapping_paf.as_deref(),
-                    out_dir,
-                    config.threads,
-                    config.read_type,
-                    config.min_base_quality,
-                    config.min_read_length.saturating_sub(1).min(500).max(1),
-                    &config.minimap_batch_size,
-                )?;
-                println!("Rescued read count: {}", stats.rescued_read_count);
-                println!("Rescued read bases: {}", stats.rescued_read_bases);
+            if let Some(stats) = rescue_stats.as_mut() {
+                for unitig in &compressed.unitigs {
+                    if unitig
+                        .members
+                        .iter()
+                        .any(|member| rescued_node_ids.contains(&member.node_id))
+                    {
+                        stats.rescued_unitig_count += 1;
+                        stats.rescued_assembly_length += unitig
+                            .fasta_seq
+                            .as_ref()
+                            .map_or(0, |sequence| sequence.len() as u64);
+                    }
+                }
                 println!("Rescued unitig count: {}", stats.rescued_unitig_count);
                 println!("Rescued assembly length: {}", stats.rescued_assembly_length);
-                println!("=== PLASMID RESCUE COMPLETE ===");
             }
 
             println!("\n=== ASSEMBLY COMPLETE ===");
@@ -445,10 +492,10 @@ mod tests {
                 bubble_removal::remove_bubbles(&mut graph, 100, 1.1);
                 graph.write_dot(&dot_path).unwrap();
                 let mut compressed =
-                    compress_graph::compress_unitigs(&graph, &fastq_path, &fasta_path);
+                    compress_graph::compress_unitigs(&graph, &overlaps, &fastq_path, &fasta_path);
                 assert!(compressed.edges.len() >= 2);
                 compressed
-                    .write_gfa(gfa_path.to_str().unwrap(), &overlaps)
+                    .write_gfa(gfa_path.to_str().unwrap())
                     .unwrap();
                 let result = (
                     snapshot,

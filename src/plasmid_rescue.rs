@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Default)]
@@ -12,6 +12,8 @@ pub struct RescueStats {
     pub rescued_read_bases: u64,
     pub rescued_unitig_count: usize,
     pub rescued_assembly_length: u64,
+    pub rescued_node_ids: HashSet<String>,
+    pub rescue_primary_reads: Option<PathBuf>,
 }
 
 pub fn run_rescue_stage(
@@ -19,11 +21,9 @@ pub fn run_rescue_stage(
     improved_assembly: &Path,
     existing_mapping_paf: Option<&Path>,
     output_dir: &Path,
-    threads: usize,
-    read_type: crate::cli::ReadType,
-    min_base_quality: f32,
-    rescue_min_read_length: u32,
-    minimap_batch_size: &str,
+    config: &crate::configs::AssembleConfig,
+    graph: &mut crate::create_overlap_graph::OverlapGraph,
+    overlaps: &mut std::collections::HashMap<(usize, usize), crate::alignment_filtering::Overlap>,
 ) -> std::io::Result<RescueStats> {
     let generated_paf = output_dir.join("rescue_mapping.paf");
     let mapping_paf = if let Some(paf) = existing_mapping_paf {
@@ -33,8 +33,8 @@ pub fn run_rescue_stage(
             filtered_reads,
             improved_assembly,
             &generated_paf,
-            threads,
-            read_type,
+            config.threads,
+            config.read_type,
         )?;
         &generated_paf
     };
@@ -57,7 +57,7 @@ pub fn run_rescue_stage(
         return Ok(stats);
     }
 
-    let assembly_dir = output_dir.join("rescue_assembly");
+    let assembly_dir = output_dir.join("rescue_graph");
     std::fs::create_dir_all(&assembly_dir)?;
     let (_, improved_assembly_length) = fasta_stats(improved_assembly)?;
     let genome_size = improved_assembly_length.clamp(1, u32::MAX as u64) as u32;
@@ -70,39 +70,64 @@ pub fn run_rescue_stage(
         "Rescue assembly target: {}× primary assembly length ({} bases) to include all {} unmapped bases",
         rescue_target_coverage, rescue_bases_for_assembly, stats.rescued_read_bases
     );
-    let status = Command::new(std::env::current_exe()?)
-        .arg("assemble")
-        .arg("--reads-fq")
-        .arg(&rescue_path)
-        .arg("--output-dir")
-        .arg(&assembly_dir)
-        .arg("--output-prefix")
-        .arg("rescued")
-        .arg("--no-rescue-plasmids") // this stops the recursive plasmid rescue from being triggered
-        .arg("--threads")
-        .arg(threads.clamp(1, 4).to_string())
-        .arg("--read-type")
-        .arg(read_type_name(read_type))
-        .arg("--minimap-batch-size")
-        .arg(minimap_batch_size)
-        .arg("--min-read-length")
-        .arg(rescue_min_read_length.to_string())
-        .arg("--min-base-quality")
-        .arg(min_base_quality.to_string())
-        .arg("--genome-size")
-        .arg(genome_size.to_string())
-        .arg("--target-coverage")
-        .arg(rescue_target_coverage.to_string())
-        .status()?;
-    if !status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("rescue assembly subprocess failed with {status}"),
-        ));
+    let rescue_paf = assembly_dir.join("rescue.paf");
+    let rescue_reads = crate::align_reads::align_reads(
+        &rescue_path,
+        config.threads.clamp(1, 4),
+        &rescue_paf,
+        &assembly_dir,
+        config.min_read_length.saturating_sub(1).clamp(1, 500),
+        config.min_base_quality,
+        Some(genome_size),
+        rescue_target_coverage,
+        &config.minimap_batch_size,
+        Some("0.001"),
+        Some("10,5000"),
+        config.read_type,
+    )?;
+    stats.rescue_primary_reads = Some(rescue_reads.primary_reads);
+    let rescue_overlaps = crate::alignment_filtering::run_alignment_filtering(
+        &rescue_paf,
+        &config.min_overlap_length,
+        &config.min_overlap_count,
+        &config.min_percent_identity,
+        &config.overhang_ratio,
+    )
+    .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?
+    .overlaps;
+    let rescue_graph = crate::create_overlap_graph::run_create_overlap_graph(&rescue_overlaps)?;
+    stats.rescued_node_ids = rescue_graph.nodes.keys().cloned().collect();
+
+    let key_offset = overlaps
+        .keys()
+        .flat_map(|(query, target)| [*query, *target])
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    for ((query, target), overlap) in rescue_overlaps {
+        overlaps.insert(
+            (
+                query.saturating_add(key_offset),
+                target.saturating_add(key_offset),
+            ),
+            overlap,
+        );
     }
 
-    let rescued_fasta = assembly_dir.join("rescued.fa");
-    (stats.rescued_unitig_count, stats.rescued_assembly_length) = fasta_stats(&rescued_fasta)?;
+    for node_id in rescue_graph.nodes.keys() {
+        graph.add_node(node_id.clone());
+    }
+    for (node_id, node) in rescue_graph.nodes {
+        for edge in node.edges {
+            graph.add_edge(
+                &node_id,
+                &edge.target_id,
+                edge.edge_len,
+                edge.overlap_len,
+                edge.identity,
+            );
+        }
+    }
     Ok(stats)
 }
 
@@ -114,14 +139,6 @@ fn rescue_target_coverage(rescued_bases: u64, assembly_length: u64) -> u32 {
         .div_ceil(assembly_length)
         .max(1)
         .min(u32::MAX as u64) as u32
-}
-
-fn read_type_name(read_type: crate::cli::ReadType) -> &'static str {
-    match read_type {
-        crate::cli::ReadType::Ont => "ont",
-        crate::cli::ReadType::PbClr => "pb-clr",
-        crate::cli::ReadType::PbHifi => "pb-hifi",
-    }
 }
 
 fn map_reads(
