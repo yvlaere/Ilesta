@@ -55,24 +55,22 @@ fn node_classification(graph: &OverlapGraph, n: &str) -> (NodeType, Option<Strin
 fn extend(graph: &OverlapGraph, start_n: &str, max_ext: usize) -> (NodeType, Vec<String>) {
     // initialize
     let mut chain: Vec<String> = Vec::new();
-    let mut n = start_n.to_string();
-    let mut steps_left = max_ext;
 
     // verify first node is a tip
-    let (node_type, next_opt) = node_classification(graph, &n);
+    let (node_type, next_opt) = node_classification(graph, start_n);
     if node_type != NodeType::Tip {
         return (node_type, chain);
     }
-    chain.push(n);
-    steps_left -= 1;
+    chain.push(start_n.to_string());
+    let mut steps_left = max_ext.saturating_sub(1);
 
     // get the next node and start extending
-    let next = match next_opt {
+    let mut next = match next_opt {
         Some(s) => s,
         None => return (NodeType::Mergeable, chain),
     };
 
-    // loop instead of while to guarantee a return value
+    // walk along the chain of mergeable nodes
     loop {
         // classify current node
         let (node_type, next_opt) = node_classification(graph, &next);
@@ -88,14 +86,14 @@ fn extend(graph: &OverlapGraph, start_n: &str, max_ext: usize) -> (NodeType, Vec
         }
 
         // get next node, next_opt is an Option, so it needs to be handled
-        let next = match next_opt {
+        let following = match next_opt {
             Some(s) => s,
             None => return (NodeType::Mergeable, chain),
         };
 
-        // advance
-        chain.push(next.clone());
-        n = next;
+        // this mergeable node is part of the tip chain; advance
+        chain.push(next);
+        next = following;
         steps_left -= 1;
     }
 }
