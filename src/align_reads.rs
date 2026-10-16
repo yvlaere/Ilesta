@@ -173,20 +173,39 @@ fn estimate_genome_size(paf_path: &std::path::Path) -> std::io::Result<(f64, u64
     let mut total_aligned: u64 = 0;
 
     for line in reader.lines() {
-        let line = line.unwrap();
+        let line = line?;
         let fields: Vec<&str> = line.split('\t').collect();
 
-        let qname = fields[0];
-        let qlen: u64 = fields[1].parse().unwrap();
-        let qstart: u64 = fields[2].parse().unwrap();
-        let qend: u64 = fields[3].parse().unwrap();
+        if fields.len() < 9 {
+            continue;
+        }
+        let (Ok(qlen), Ok(qstart), Ok(qend), Ok(tlen), Ok(tstart), Ok(tend)) = (
+            fields[1].parse::<u64>(),
+            fields[2].parse::<u64>(),
+            fields[3].parse::<u64>(),
+            fields[6].parse::<u64>(),
+            fields[7].parse::<u64>(),
+            fields[8].parse::<u64>(),
+        ) else {
+            continue;
+        };
 
         // count each read once
-        if seen.insert(qname.to_string()) {
+        if seen.insert(fields[0].to_string()) {
             total_bases += qlen;
         }
+        if seen.insert(fields[5].to_string()) {
+            total_bases += tlen;
+        }
 
-        total_aligned += qend - qstart;
+        total_aligned += qend.saturating_sub(qstart) + tend.saturating_sub(tstart);
+    }
+
+    if total_bases == 0 || total_aligned == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "no read overlaps found, cannot estimate the genome size; provide --genome-size",
+        ));
     }
 
     let coverage = total_aligned as f64 / total_bases as f64;
