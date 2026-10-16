@@ -397,7 +397,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "Consensus: {} rounds, {} -> {} bases",
                     cstats.rounds_run, cstats.bases_before, cstats.bases_after
                 );
-+            }
+            }
             if assembly_reads != reads.primary_reads {
                 std::fs::remove_file(&assembly_reads)?;
             }

@@ -66,8 +66,6 @@ fn subsample_fastq(
     stats: &Vec<ReadStats>,
     nr_bases: u64,
 ) -> std::io::Result<(u64, usize)> {
-    // time for debugging
-    let start_time = Instant::now();
 
     // keep the n longest reads untill we reach nr_bases
     let mut sorted_stats = stats.clone();
