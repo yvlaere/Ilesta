@@ -66,5 +66,9 @@ pub struct AssembleConfig {
     pub completion_min_alignment_len: u32,
     pub completion_min_identity: f64,
     pub rescue_plasmids: bool,
+    pub consensus_rounds: u32,
+    pub consensus_window_len: usize,
+    pub consensus_min_depth: usize,
+    pub consensus_max_depth: usize,
     pub seed: Option<u64>,
 }

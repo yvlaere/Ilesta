@@ -349,6 +349,22 @@ pub struct AssembleArgs {
     #[arg(long, hide = true, action = clap::ArgAction::SetTrue)]
     pub no_rescue_plasmids: bool,
 
+    /// Consensus polishing rounds on the final unitigs (0 disables)
+    #[arg(long, default_value_t = 2u32, help_heading = "Consensus")]
+    pub consensus_rounds: u32,
+
+    /// Window length (bp) for consensus calling
+    #[arg(long, default_value_t = 500usize, help_heading = "Consensus")]
+    pub consensus_window_len: usize,
+
+    /// Minimum read segments per window to re-call it (else keep draft)
+    #[arg(long, default_value_t = 3usize, help_heading = "Consensus")]
+    pub consensus_min_depth: usize,
+
+    /// Maximum read segments used per window
+    #[arg(long, default_value_t = 50usize, help_heading = "Consensus")]
+    pub consensus_max_depth: usize,
+
     /// Optional random seed for reproducible results
     #[arg(long, help_heading = "Assembly")]
     pub seed: Option<u64>,
@@ -393,6 +409,10 @@ impl From<&AssembleArgs> for crate::configs::AssembleConfig {
             completion_min_alignment_len: args.completion_min_alignment_len,
             completion_min_identity: args.completion_min_identity,
             rescue_plasmids: args.rescue_plasmids && !args.no_rescue_plasmids,
+            consensus_rounds: args.consensus_rounds,
+            consensus_window_len: args.consensus_window_len,
+            consensus_min_depth: args.consensus_min_depth,
+            consensus_max_depth: args.consensus_max_depth,
             seed: args.seed,
         }
     }
