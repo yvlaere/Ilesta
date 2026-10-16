@@ -4,7 +4,6 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::process::Command;
-use std::time::Instant;
 
 #[derive(Clone)]
 struct ReadStats {
@@ -65,8 +64,8 @@ fn subsample_fastq(
     input_path: &std::path::Path,
     output_path: &std::path::Path,
     stats: &Vec<ReadStats>,
-    nr_bases: u32,
-) -> std::io::Result<(u32, usize)> {
+    nr_bases: u64,
+) -> std::io::Result<(u64, usize)> {
     // time for debugging
     let start_time = Instant::now();
 
@@ -74,15 +73,15 @@ fn subsample_fastq(
     let mut sorted_stats = stats.clone();
     sorted_stats.sort_by_key(|r| std::cmp::Reverse(r.len));
     let mut selected_reads = HashSet::new();
-    let mut total_len = 0;
+    let mut total_len: u64 = 0;
 
     for r in sorted_stats {
-        if total_len + r.len >= nr_bases {
-            total_len += r.len;
+        if total_len + r.len as u64 >= nr_bases {
+            total_len += r.len as u64;
             selected_reads.insert(r.name);
             break;
         }
-        total_len += r.len;
+        total_len += r.len as u64;
         selected_reads.insert(r.name);
     }
 
@@ -130,8 +129,6 @@ fn run_minimap2(
     minimap2_u: Option<&str>,
     read_type: crate::cli::ReadType,
 ) -> std::io::Result<()> {
-    // time for debugging
-    let start_time = Instant::now();
 
     let mut cmd = Command::new("minimap2");
     for arg in read_type.minimap2_args() {
@@ -167,7 +164,7 @@ fn run_minimap2(
     Ok(())
 }
 
-fn estimate_genome_size(paf_path: &std::path::Path) -> std::io::Result<(f64, u32)> {
+fn estimate_genome_size(paf_path: &std::path::Path) -> std::io::Result<(f64, u64)> {
     let file = File::open(paf_path)?;
     let reader = BufReader::new(file);
 
@@ -199,7 +196,7 @@ fn estimate_genome_size(paf_path: &std::path::Path) -> std::io::Result<(f64, u32
     println!("Coverage: {:.2}", coverage);
     println!("Estimated genome size: {:.0}", genome_size);
 
-    Ok((coverage as f64, genome_size as u32))
+    Ok((coverage as f64, genome_size as u64))
 }
 
 pub fn align_reads(
@@ -228,12 +225,12 @@ pub fn align_reads(
         min_base_quality,
     )?;
 
-    let mut genome_size = 0;
+    let genome_size: u64;
 
     match input_genome_size {
         Some(size) => {
             println!("Using provided genome size: {} bases", size);
-            genome_size = size;
+            genome_size = size as u64;
         }
         None => {
             println!("No genome size provided, will estimate from data");
@@ -259,10 +256,9 @@ pub fn align_reads(
                 output_paf.display()
             );
 
-            let mut coverage = 0 as f64;
-            (coverage, genome_size) = estimate_genome_size(output_paf)?;
+            let (mut coverage, mut estimated_size) = estimate_genome_size(output_paf)?;
 
-            let mut subsampling_rounds = 1;
+            let mut subsampling_rounds: u64 = 1;
             let mut previous_subsampled_bases = 0;
 
             while coverage < 10.0 {
@@ -299,11 +295,13 @@ pub fn align_reads(
                 );
 
                 // estimate genome size
-                (coverage, genome_size) = estimate_genome_size(output_paf)?;
+                (coverage, estimated_size) = estimate_genome_size(output_paf)?;
 
                 previous_subsampled_bases = subsampled_bases;
                 subsampling_rounds += 1;
             }
+
+            genome_size = estimated_size;
 
             // remove intermediate files
             std::fs::remove_file(subsampled_path)?;
@@ -317,7 +315,7 @@ pub fn align_reads(
         &basic_filtering_path,
         &subsampled_output_path,
         &stats,
-        genome_size.saturating_mul(target_coverage),
+        genome_size.saturating_mul(target_coverage as u64),
     )?;
     run_minimap2(
         &subsampled_output_path,
