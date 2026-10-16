@@ -17,7 +17,7 @@ struct Read {
     id: usize,
     name: String,
     length: u32,
-    per_base_coverage: Vec<u32>,
+    per_base_coverage: Vec<u16>,
     coverage_start: u32,
     coverage_end: u32,
 }
@@ -452,10 +452,10 @@ pub fn run_alignment_filtering(
             // update read coverage statistics
             reads[query_id].per_base_coverage[qstart..qend]
                 .iter_mut()
-                .for_each(|c| *c += 1);
+                .for_each(|c| *c = c.saturating_add(1));
             reads[target_id].per_base_coverage[tstart..tend]
                 .iter_mut()
-                .for_each(|c| *c += 1);
+                .for_each(|c| *c = c.saturating_add(1));
         }
     }
 
@@ -483,7 +483,7 @@ pub fn run_alignment_filtering(
         let mut best_len = 0;
         let mut best = (0, 0);
         for (i, x) in read.per_base_coverage.iter().enumerate() {
-            if x > min_overlap_count {
+            if (*x as u32) > *min_overlap_count {
                 if cur_len == 0 {
                     cur_start = i;
                 }
@@ -558,10 +558,10 @@ pub fn run_alignment_filtering(
 
     // filter low coverage reads
     let threshold = *min_overlap_count;
-    let low_coverage_reads: Vec<_> = reads
+    let low_coverage_reads: HashSet<usize> = reads
         .iter()
         .enumerate()
-        .filter(|(_, r)| r.per_base_coverage.iter().copied().max().unwrap_or(0) < threshold)
+        .filter(|(_, r)| (r.per_base_coverage.iter().copied().max().unwrap_or(0) as u32) < threshold)
         .map(|(id, _)| id)
         .collect();
     overlaps.retain(|(q_id, t_id), _| {
