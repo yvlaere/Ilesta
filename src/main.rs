@@ -4,6 +4,7 @@ mod bubble_removal;
 mod cli;
 mod compress_graph;
 mod configs;
+mod consensus;
 mod create_overlap_graph;
 mod graph_analysis;
 mod heuristic_simplification;
@@ -375,6 +376,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config.threads,
             )?;
             println!("Removed {} contained assembly segments", removed_segments);
+            if config.consensus_rounds > 0 {
+                println!("\n=== CONSENSUS POLISHING ===");
+                let params = consensus::ConsensusParams {
+                    rounds: config.consensus_rounds,
+                    window_len: config.consensus_window_len,
+                    min_depth: config.consensus_min_depth,
+                    max_depth: config.consensus_max_depth,
+                    threads: config.threads,
+                    read_type: config.read_type,
+                };
+                let cstats = consensus::polish_graph(
+                    &mut compressed,
+                    &out_path,
+                    &assembly_reads,
+                    out_dir,
+                    &params,
+                )?;
+                println!(
+                    "Consensus: {} rounds, {} -> {} bases",
+                    cstats.rounds_run, cstats.bases_before, cstats.bases_after
+                );
++            }
             if assembly_reads != reads.primary_reads {
                 std::fs::remove_file(&assembly_reads)?;
             }
