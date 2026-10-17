@@ -3,435 +3,210 @@ mod alignment_filtering;
 mod bubble_removal;
 mod cli;
 mod compress_graph;
-mod configs;
 mod consensus;
 mod create_overlap_graph;
-mod graph_analysis;
 mod heuristic_simplification;
-mod iterative_completion;
 mod plasmid_rescue;
+mod scaffold;
 mod segment_dedup;
 mod tip_trimming;
 mod transitive_edge_reduction;
 mod utils;
 
+use alignment_filtering::Overlap;
 use clap::Parser;
-use cli::{Cli, Commands};
-use std::collections::HashSet;
-
-// used for deserializing overlaps
-use crate::alignment_filtering::Overlap;
-use std::collections::HashMap;
+use cli::{AssembleArgs, Cli, Commands};
+use create_overlap_graph::OverlapGraph;
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
 use std::fs::File;
 use std::io::BufReader;
+use std::path::{Path, PathBuf};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
-
-    match &cli.command {
+fn main() -> Result<(), Box<dyn Error>> {
+    match Cli::parse().command {
         Commands::Align(args) => {
-            let config: crate::configs::AlignReadsConfig = args.into();
-
-            // ensure output directory exists
-            let out_dir = std::path::Path::new(&config.output_dir);
+            let out_dir = Path::new(&args.output_dir);
             std::fs::create_dir_all(out_dir)?;
-
-            // check if the reads file exists
-            let reads_path = std::path::Path::new(&config.reads_fq);
-            if !reads_path.exists() {
-                return Err(format!("Reads file {} does not exist", config.reads_fq).into());
-            }
-
-            let paf_path = out_dir.join(&config.paf);
-            let _reads = align_reads::align_reads(
-                reads_path,
-                config.threads,
-                &paf_path,
-                out_dir,
-                config.min_read_length,
-                config.min_base_quality,
-                config.genome_size,
-                config.target_coverage,
-                &config.minimap_batch_size,
-                config.minimap2_f.as_deref(),
-                config.minimap2_u.as_deref(),
-                config.read_type,
-            )?;
+            check_exists(&args.reads.reads_fq)?;
+            align_reads::align_reads(&args.reads, out_dir)?;
         }
-
         Commands::AlignmentFiltering(args) => {
-            let config: crate::configs::AlignmentFilteringConfig = args.into();
-            crate::utils::set_seed(config.seed);
-
-            let out_dir = std::path::Path::new(&config.output_dir);
+            utils::set_seed(args.seed);
+            let out_dir = Path::new(&args.output_dir);
             std::fs::create_dir_all(out_dir)?;
-            let paf_path = out_dir.join(&config.paf);
-
-            // run filtering and serialize overlaps to the configured output
-            let out = alignment_filtering::run_alignment_filtering(
-                &paf_path,
-                &config.min_overlap_length,
-                &config.min_overlap_count,
-                &config.min_percent_identity,
-                &config.overhang_ratio,
-            )?;
-            out.serialize_overlaps(&config.output_overlaps)?;
-            println!("Wrote overlaps to {}", config.output_overlaps);
+            let out = alignment_filtering::run_alignment_filtering(&out_dir.join(&args.paf), &args.overlap)?;
+            out.serialize_overlaps(&args.output_overlaps)?;
+            println!("Wrote overlaps to {}", args.output_overlaps);
         }
-
-        Commands::Assemble(args) => {
-            let config: crate::configs::AssembleConfig = args.into();
-            crate::utils::set_seed(config.seed);
-
-            // ensure output directory exists
-            let out_dir = std::path::Path::new(&config.output_dir);
-            std::fs::create_dir_all(out_dir)?;
-
-            // check if the reads file exists
-            let reads_path = std::path::Path::new(&config.reads_fq);
-            if !reads_path.exists() {
-                return Err(format!("Reads file {} does not exist", config.reads_fq).into());
-            }
-
-            // read filtering and alignment
-            let paf_path = out_dir.join(&config.paf);
-            println!("=== READ FILTERING AND ALIGNMENT ===");
-            let reads = align_reads::align_reads(
-                reads_path,
-                config.threads,
-                &paf_path,
-                out_dir,
-                config.min_read_length,
-                config.min_base_quality,
-                config.genome_size,
-                config.target_coverage,
-                &config.minimap_batch_size,
-                config.minimap2_f.as_deref(),
-                config.minimap2_u.as_deref(),
-                config.read_type,
-            )?;
-            println!("Filtered read count: {}", reads.filtered_read_count);
-            println!(
-                "Reads used in primary assembly: {}",
-                reads.primary_read_count
-            );
-            println!("=== READ FILTERING AND ALIGNMENT COMPLETE ===");
-
-            // Determine the path to overlaps: either use provided overlaps or run alignment filtering
-            let overlaps_path_str = if let Some(ref overlaps_file) = config.overlaps {
-                // Use provided overlaps
-                println!("Using provided overlaps from {}", overlaps_file);
-                overlaps_file.clone()
-            } else {
-                // Run alignment filtering
-                // write overlaps into the output directory using the chosen prefix
-                let overlaps_path = out_dir.join(format!("{}.overlaps.bin", config.output_prefix));
-                let overlaps_path_str = overlaps_path
-                    .to_str()
-                    .ok_or("invalid output path")?
-                    .to_string();
-
-                let out = alignment_filtering::run_alignment_filtering(
-                    &paf_path,
-                    &config.min_overlap_length,
-                    &config.min_overlap_count,
-                    &config.min_percent_identity,
-                    &config.overhang_ratio,
-                )?;
-                out.serialize_overlaps(&overlaps_path_str)?;
-                println!("Wrote overlaps to {}", overlaps_path_str);
-                overlaps_path_str
-            };
-
-            // load overlaps, build graph
-            let file = File::open(&overlaps_path_str)?;
-            let reader = BufReader::new(file);
-            let mut overlaps: HashMap<(usize, usize), Overlap> = bincode::deserialize_from(reader)?;
-            let mut graph = create_overlap_graph::run_create_overlap_graph(&overlaps)?;
-
-            // Graph simplification: iterative cleanup
-            graph_analysis::check_synchronization(&graph);
-            println!("\n=== STARTING GRAPH CLEANUP ===");
-            let max_bubble_len = config.max_bubble_length as usize;
-            let min_support_ratio = config.min_support_ratio;
-            let max_tip_len = config.max_tip_len as usize;
-            let fuzz = config.fuzz;
-
-            for iteration in 1..=config.cleanup_iterations {
-                println!("\n=== Cleanup Iteration {} ===", iteration);
-
-                // transitive edge reduction
-                let edges_before: usize = graph.nodes.values().map(|n| n.edges.len()).sum();
-                transitive_edge_reduction::reduce_transitive_edges(&mut graph, fuzz);
-                let edges_after: usize = graph.nodes.values().map(|n| n.edges.len()).sum();
-                println!(
-                    "Removed {} edges with transitive edge reduction",
-                    edges_before.saturating_sub(edges_after)
-                );
-
-                // heuristic simplification: remove multi-edges
-                //println!("Applying heuristic simplification: removing multi-edges...");
-                let n_multi = heuristic_simplification::remove_multi_edges(&mut graph);
-                println!("Removed {} multi-edges", n_multi);
-
-                graph_analysis::check_synchronization(&graph);
-
-                //heuristic simplification: remove short edges
-                //println!("Applying heuristic simplification: removing short edges...");
-                let n_short = heuristic_simplification::remove_short_edges(
-                    &mut graph,
-                    config.short_edge_ratio,
-                );
-                println!("Removed {} short edges", n_short);
-
-                graph_analysis::check_synchronization(&graph);
-
-                // bubble removal
-                let node_count_before = graph.nodes.len();
-                bubble_removal::remove_bubbles(&mut graph, max_bubble_len, min_support_ratio);
-                let node_count_after = graph.nodes.len();
-                println!(
-                    "Removed {} bubble nodes (including RCs)",
-                    node_count_before.saturating_sub(node_count_after)
-                );
-
-                // remove small components (<2)
-                let components = graph_analysis::weakly_connected_components(&graph);
-                let mut comp_nodes_to_remove: HashSet<String> = HashSet::new();
-                for component in components.iter() {
-                    if component.len() < 2 {
-                        for nid in component.iter() {
-                            comp_nodes_to_remove.insert(nid.clone());
-                        }
-                    }
-                }
-                let small_comp_count = comp_nodes_to_remove.len();
-                let comp_nodes_vec = crate::utils::order_keys(comp_nodes_to_remove);
-                for node_id in comp_nodes_vec.iter() {
-                    graph.nodes.remove(node_id.as_str());
-                    if node_id.ends_with('+') {
-                        let rc = node_id[..node_id.len() - 1].to_string() + "-";
-                        graph.nodes.remove(rc.as_str());
-                    } else if node_id.ends_with('-') {
-                        let rc = node_id[..node_id.len() - 1].to_string() + "+";
-                        graph.nodes.remove(rc.as_str());
-                    }
-                }
-                println!(
-                    "Removed {} oriented nodes from small components (<2)",
-                    small_comp_count
-                );
-
-                // tip trimming
-                let before_trim = graph.nodes.len();
-                tip_trimming::trim_tips(&mut graph, max_tip_len);
-                let after_trim = graph.nodes.len();
-                println!(
-                    "Removed {} nodes by tip trimming",
-                    before_trim.saturating_sub(after_trim)
-                );
-            }
-
-            println!("\n=== GRAPH CLEANUP COMPLETE ===");
-            println!("Final graph has {} nodes", graph.nodes.len());
-            println!(
-                "Final graph has {} edges",
-                graph.nodes.values().map(|n| n.edges.len()).sum::<usize>()
-            );
-
-            let mut rescue_mapping_paf = None;
-            if config.completion_enabled || config.rescue_plasmids {
-                println!("\n=== STARTING READ-GUIDED COMPLETION ===");
-                println!(
-                    "Reads used for completion/scaffolding: {}",
-                    reads.filtered_read_count
-                );
-                let mut total_unitig_joins = 0;
-                for round in 1..=config.completion_rounds {
-                    println!("\n--- Completion round {} ---", round);
-                    let first_pass_unitigs_path =
-                        out_dir.join(format!("{}.first_pass.fa", config.output_prefix));
-                    let initial_compressed = compress_graph::compress_unitigs(
-                        &graph,
-                        &overlaps,
-                        &reads.primary_reads,
-                        &first_pass_unitigs_path,
-                    );
-                    let completion_paf =
-                        out_dir.join(format!("{}.completion.paf", config.output_prefix));
-                    let completion = iterative_completion::run_completion_round(
-                        &graph,
-                        &reads.filtered_reads,
-                        &first_pass_unitigs_path,
-                        &completion_paf,
-                        config.completion_min_alignment_len,
-                        config.completion_min_identity,
-                        config.threads,
-                        config.read_type,
-                    )?;
-                    rescue_mapping_paf = Some(completion_paf);
-                    if completion.is_empty() {
-                        println!("No completion bridges were added.");
-                        break;
-                    }
-                    let joins = iterative_completion::apply_completion_edges(
-                        &mut graph,
-                        &initial_compressed,
-                        &completion,
-                    );
-                    total_unitig_joins += joins;
-                    println!("Added {} unitig joins", joins);
-
-                    for iteration in 1..=config.cleanup_iterations {
-                        println!("  Cleanup iteration {}", iteration);
-                        let edges_before: usize = graph.nodes.values().map(|n| n.edges.len()).sum();
-                        transitive_edge_reduction::reduce_transitive_edges(&mut graph, fuzz);
-                        let edges_after: usize = graph.nodes.values().map(|n| n.edges.len()).sum();
-                        println!(
-                            "  Removed {} edges with transitive edge reduction",
-                            edges_before.saturating_sub(edges_after)
-                        );
-                        let n_multi = heuristic_simplification::remove_multi_edges(&mut graph);
-                        println!("  Removed {} multi-edges", n_multi);
-                        let n_short = heuristic_simplification::remove_short_edges(
-                            &mut graph,
-                            config.short_edge_ratio,
-                        );
-                        println!("  Removed {} short edges", n_short);
-                        bubble_removal::remove_bubbles(
-                            &mut graph,
-                            max_bubble_len,
-                            min_support_ratio,
-                        );
-                        tip_trimming::trim_tips(&mut graph, max_tip_len);
-                    }
-                }
-                println!("Total unitig joins made: {}", total_unitig_joins);
-                println!("\n=== READ-GUIDED COMPLETION COMPLETE ===");
-            }
-
-            println!("\n=== PLOTTING OVERLAP GRAPH ===");
-            // write graph snapshot into output dir
-            let dot_path = out_dir.join("graph.dot");
-            let dot_str = dot_path.to_str().ok_or("invalid output path")?;
-            graph.write_dot(dot_str)?;
-
-            println!("Wrote graph visualization to {}", dot_str);
-
-            println!("\n=== COMPRESSING UNITIGS AND WRITING OUTPUT ===");
-            // compress into unitigs into output dir
-            let out_path = out_dir.join(format!("{}.fa", config.output_prefix));
-            let primary_unitig_count = {
-                let primary_compressed = compress_graph::compress_unitigs(
-                    &graph,
-                    &overlaps,
-                    &reads.primary_reads,
-                    &out_path,
-                );
-                primary_compressed.unitigs.len()
-            };
-            println!(
-                "Primary assembly produced {} unitigs (written to {})",
-                primary_unitig_count,
-                out_path.display()
-            );
-
-            let mut rescued_node_ids = HashSet::new();
-            let mut assembly_reads = reads.primary_reads.clone();
-            let mut rescue_stats = None;
-            if config.rescue_plasmids {
-                println!("\n=== STARTING PLASMID RESCUE ===");
-                let stats = plasmid_rescue::run_rescue_stage(
-                    &reads.filtered_reads,
-                    &out_path,
-                    rescue_mapping_paf.as_deref(),
-                    out_dir,
-                    &config,
-                    &mut graph,
-                    &mut overlaps,
-                )?;
-                rescued_node_ids = stats.rescued_node_ids.clone();
-                if let Some(rescue_reads) = &stats.rescue_primary_reads {
-                    let combined_reads =
-                        out_dir.join(format!("{}.combined.fq", config.output_prefix));
-                    let mut combined_file = File::create(&combined_reads)?;
-                    std::io::copy(&mut File::open(&reads.primary_reads)?, &mut combined_file)?;
-                    std::io::copy(&mut File::open(rescue_reads)?, &mut combined_file)?;
-                    assembly_reads = combined_reads;
-                }
-                println!("Rescued read count: {}", stats.rescued_read_count);
-                println!("Rescued read bases: {}", stats.rescued_read_bases);
-                println!("Rescued graph node count: {}", stats.rescued_node_ids.len());
-                println!("=== PLASMID RESCUE COMPLETE ===");
-                rescue_stats = Some(stats);
-            }
-
-            println!("\n=== WRITING COMBINED ASSEMBLY ===");
-            let mut compressed =
-                compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads, &out_path);
-            let removed_segments = segment_dedup::remove_contained_segments(
-                &mut compressed,
-                &out_path,
-                out_dir,
-                config.threads,
-            )?;
-            println!("Removed {} contained assembly segments", removed_segments);
-            if config.consensus_rounds > 0 {
-                println!("\n=== CONSENSUS POLISHING ===");
+        Commands::Scaffold(args) => {
+            let out = Path::new(&args.output);
+            let work_dir = out.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+            let reads = Path::new(&args.reads_fq);
+            let mut graph = compress_graph::CompressedGraph::from_fasta(Path::new(&args.contigs))?;
+            let stats = scaffold::scaffold_graph(&mut graph, reads, work_dir, &args.scaffold, args.threads, args.read_type)?;
+            println!("Applied {} bridges ({} circularised)", stats.accepted, stats.circularised);
+            if args.polish_rounds > 0 {
                 let params = consensus::ConsensusParams {
-                    rounds: config.consensus_rounds,
-                    window_len: config.consensus_window_len,
-                    min_depth: config.consensus_min_depth,
-                    max_depth: config.consensus_max_depth,
-                    threads: config.threads,
-                    read_type: config.read_type,
+                    rounds: args.polish_rounds,
+                    window_len: 500,
+                    min_depth: 3,
+                    max_depth: 25,
+                    threads: args.threads,
+                    read_type: args.read_type,
                 };
-                let cstats = consensus::polish_graph(
-                    &mut compressed,
-                    &out_path,
-                    &assembly_reads,
-                    out_dir,
-                    &params,
-                )?;
-                println!(
-                    "Consensus: {} rounds, {} -> {} bases",
-                    cstats.rounds_run, cstats.bases_before, cstats.bases_after
-                );
+                consensus::polish_graph(&mut graph, reads, work_dir, &params)?;
             }
-            if assembly_reads != reads.primary_reads {
-                std::fs::remove_file(&assembly_reads)?;
-            }
-            println!(
-                "Assembly produced {} unitigs (written to {})",
-                compressed.unitigs.len(),
-                out_path.display()
-            );
-            let gfa_path = out_dir.join(format!("{}.gfa", config.output_prefix));
-            let gfa_str = gfa_path.to_str().ok_or("invalid output path")?;
-            compressed.write_gfa(gfa_str)?;
-            println!("Wrote GFA to {}", gfa_str);
-            if let Some(stats) = rescue_stats.as_mut() {
-                for unitig in &compressed.unitigs {
-                    if unitig
-                        .members
-                        .iter()
-                        .any(|member| rescued_node_ids.contains(&member.node_id))
-                    {
-                        stats.rescued_unitig_count += 1;
-                        stats.rescued_assembly_length += unitig
-                            .fasta_seq
-                            .as_ref()
-                            .map_or(0, |sequence| sequence.len() as u64);
-                    }
-                }
-                println!("Rescued unitig count: {}", stats.rescued_unitig_count);
-                println!("Rescued assembly length: {}", stats.rescued_assembly_length);
-            }
+            graph.write_fasta(out)?;
+        }
+        Commands::Assemble(args) => assemble(&args)?,
+    }
+    Ok(())
+}
 
-            println!("\n=== ASSEMBLY COMPLETE ===");
+fn check_exists(path: &str) -> Result<(), Box<dyn Error>> {
+    if Path::new(path).exists() {
+        Ok(())
+    } else {
+        Err(format!("Reads file {path} does not exist").into())
+    }
+}
+
+fn edge_count(graph: &OverlapGraph) -> usize {
+    graph.nodes.values().map(|n| n.edges.len()).sum()
+}
+
+/// Iterative graph cleanup: transitive reduction, multi-edges, short edges, bubbles,
+/// isolated nodes and tips.
+fn cleanup_graph(graph: &mut OverlapGraph, args: &AssembleArgs) {
+    println!("\n=== STARTING GRAPH CLEANUP ===");
+    utils::check_synchronization(graph);
+    for iteration in 1..=args.cleanup_iterations {
+        println!("\n=== Cleanup Iteration {iteration} ===");
+        let before = edge_count(graph);
+        transitive_edge_reduction::reduce_transitive_edges(graph, args.fuzz);
+        println!("Removed {} edges with transitive edge reduction", before - edge_count(graph));
+        println!("Removed {} multi-edges", heuristic_simplification::remove_multi_edges(graph));
+        println!("Removed {} short edges", heuristic_simplification::remove_short_edges(graph, args.short_edge_ratio));
+        let before = graph.nodes.len();
+        bubble_removal::remove_bubbles(graph, args.max_bubble_length as usize, args.min_support_ratio);
+        println!("Removed {} bubble nodes (including RCs)", before - graph.nodes.len());
+
+        // nodes without any edge
+        let targets: HashSet<&str> =
+            graph.nodes.values().flat_map(|n| n.edges.iter().map(|e| e.target_id.as_str())).collect();
+        let isolated: HashSet<String> = graph
+            .nodes
+            .iter()
+            .filter(|(id, n)| n.edges.is_empty() && !targets.contains(id.as_str()))
+            .map(|(id, _)| id.clone())
+            .collect();
+        utils::delete_nodes_and_edges(graph, &isolated);
+        println!("Removed {} isolated nodes", isolated.len());
+
+        let before = graph.nodes.len();
+        tip_trimming::trim_tips(graph, args.max_tip_len as usize);
+        println!("Removed {} nodes by tip trimming", before - graph.nodes.len());
+    }
+    utils::check_synchronization(graph);
+    println!("\n=== GRAPH CLEANUP COMPLETE ===");
+    println!("Final graph has {} nodes and {} edges", graph.nodes.len(), edge_count(graph));
+}
+
+fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
+    utils::set_seed(args.seed);
+    let out_dir = Path::new(&args.output_dir);
+    std::fs::create_dir_all(out_dir)?;
+    check_exists(&args.reads.reads_fq)?;
+    let (threads, read_type) = (args.reads.threads, args.reads.read_type);
+
+    println!("=== READ FILTERING AND ALIGNMENT ===");
+    let reads = align_reads::align_reads(&args.reads, out_dir)?;
+    println!("Filtered read count: {}", reads.filtered_read_count);
+    println!("Reads used in primary assembly: {}", reads.primary_read_count);
+
+    // overlaps: provided, or filtered from the alignments
+    let overlaps_path: PathBuf = match &args.overlaps {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let path = out_dir.join(format!("{}.overlaps.bin", args.output_prefix));
+            let out = alignment_filtering::run_alignment_filtering(&out_dir.join(&args.reads.paf), &args.overlap)?;
+            out.serialize_overlaps(path.to_str().ok_or("invalid output path")?)?;
+            println!("Wrote overlaps to {}", path.display());
+            path
+        }
+    };
+    let mut overlaps: HashMap<(usize, usize), Overlap> = bincode::deserialize_from(BufReader::new(File::open(&overlaps_path)?))?;
+    let mut graph = create_overlap_graph::run_create_overlap_graph(&overlaps)?;
+    cleanup_graph(&mut graph, args);
+    if args.write_dot {
+        graph.write_dot(out_dir.join("graph.dot"))?;
+    }
+
+    println!("\n=== COMPRESSING UNITIGS ===");
+    let out_path = out_dir.join(format!("{}.fa", args.output_prefix));
+    let mut assembly_reads = reads.primary_reads.clone();
+    let mut compressed = compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads);
+    println!("Primary assembly produced {} unitigs", compressed.unitigs.len());
+
+    let mut rescued_nodes = HashSet::new();
+    if args.rescue_enabled() {
+        println!("\n=== PLASMID RESCUE ===");
+        compressed.write_fasta(&out_path)?;
+        let rescue = plasmid_rescue::run_rescue_stage(
+            &reads.filtered_reads, &out_path, out_dir, &args.reads, &args.overlap, &mut graph, &mut overlaps,
+        )?;
+        if let Some(rescue) = rescue {
+            let combined = out_dir.join(format!("{}.combined.fq", args.output_prefix));
+            let mut file = File::create(&combined)?;
+            std::io::copy(&mut File::open(&reads.primary_reads)?, &mut file)?;
+            std::io::copy(&mut File::open(&rescue.reads)?, &mut file)?;
+            assembly_reads = combined;
+            rescued_nodes = rescue.node_ids;
+            compressed = compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads);
         }
     }
 
+    compressed.write_fasta(&out_path)?;
+    let removed = segment_dedup::remove_contained_segments(&mut compressed, &out_path, out_dir, threads)?;
+    println!("Removed {removed} contained assembly segments");
+
+    if args.scaffold.rounds > 0 {
+        println!("\n=== CONTIG BRIDGING ===");
+        let stats = scaffold::scaffold_graph(&mut compressed, &assembly_reads, out_dir, &args.scaffold, threads, read_type)?;
+        println!("Bridging: {} bridges applied, {} circularised", stats.accepted, stats.circularised);
+    }
+    if args.consensus_rounds > 0 {
+        println!("\n=== CONSENSUS POLISHING ===");
+        let params = consensus::ConsensusParams {
+            rounds: args.consensus_rounds,
+            window_len: args.consensus_window_len,
+            min_depth: args.consensus_min_depth,
+            max_depth: args.consensus_max_depth,
+            threads,
+            read_type,
+        };
+        let stats = consensus::polish_graph(&mut compressed, &assembly_reads, out_dir, &params)?;
+        println!("Consensus: {} rounds, {} -> {} bases", stats.rounds_run, stats.bases_before, stats.bases_after);
+    }
+    if assembly_reads != reads.primary_reads {
+        std::fs::remove_file(&assembly_reads)?;
+    }
+
+    compressed.write_fasta(&out_path)?;
+    let gfa_path = out_dir.join(format!("{}.gfa", args.output_prefix));
+    compressed.write_gfa(gfa_path.to_str().ok_or("invalid output path")?)?;
+    println!("Assembly produced {} unitigs (written to {} and {})", compressed.unitigs.len(), out_path.display(), gfa_path.display());
+    if !rescued_nodes.is_empty() {
+        let rescued: Vec<_> = compressed
+            .unitigs
+            .iter()
+            .filter(|u| u.members.iter().any(|m| rescued_nodes.contains(&m.node_id)))
+            .collect();
+        let bases: usize = rescued.iter().map(|u| u.fasta_seq.as_ref().map_or(0, String::len)).sum();
+        println!("Rescued unitigs: {} ({bases} bases)", rescued.len());
+    }
+    println!("\n=== ASSEMBLY COMPLETE ===");
     Ok(())
 }
 
@@ -521,8 +296,8 @@ mod tests {
                 heuristic_simplification::remove_short_edges(&mut graph, 0.8);
                 bubble_removal::remove_bubbles(&mut graph, 100, 1.1);
                 graph.write_dot(&dot_path).unwrap();
-                let compressed =
-                    compress_graph::compress_unitigs(&graph, &overlaps, &fastq_path, &fasta_path);
+                let compressed = compress_graph::compress_unitigs(&graph, &overlaps, &fastq_path);
+                compressed.write_fasta(&fasta_path).unwrap();
                 assert!(compressed.edges.len() >= 2);
                 compressed.write_gfa(gfa_path.to_str().unwrap()).unwrap();
                 let result = (
