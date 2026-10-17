@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::cli::ReadType;
@@ -60,6 +59,8 @@ const MISMATCH: i32 = -4;
 const GAP: i32 = -8;
 /// Slack (in backbone positions) around the window span of a read segment.
 const SLACK: u32 = 24;
+/// Half-width of the DP band around the interpolated read position.
+const BAND: usize = 24;
 /// Minimum identity of a whole read alignment to be used.
 const MIN_IDENTITY: f64 = 0.6;
 /// A path node is kept only if at least this fraction of the local median
@@ -74,13 +75,12 @@ const MIN_CONTIG_LEN: usize = 100;
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Polish all unitigs of `graph` in place and rewrite `fasta_path`.
+/// Polish all unitigs of `graph` in place.
 ///
 /// `reads_path` is the FASTQ(.gz) that was used for assembly (it is only read,
 /// never modified).  Intermediate files are written to `work_dir` and removed.
 pub fn polish_graph(
     graph: &mut CompressedGraph,
-    fasta_path: &Path,
     reads_path: &Path,
     work_dir: &Path,
     params: &ConsensusParams,
@@ -127,18 +127,6 @@ pub fn polish_graph(
         unitig.fasta_seq = Some(String::from_utf8(contig.seq)?);
     }
 
-    let mut fasta = std::fs::File::create(fasta_path)?;
-    for unitig in &graph.unitigs {
-        let sequence = unitig.fasta_seq.as_deref().unwrap_or("");
-        writeln!(
-            fasta,
-            ">unitig_{} len={}bp topology={}",
-            unitig.id,
-            sequence.len(),
-            unitig.topology
-        )?;
-        writeln!(fasta, "{sequence}")?;
-    }
     Ok(stats)
 }
 
@@ -272,21 +260,9 @@ fn polish_round(
     }
 
     // ---- 2. map reads -----------------------------------------------------
-    let status = Command::new("minimap2")
-        .arg("-c")
-        .arg("--secondary=no")
-        .arg("-t")
-        .arg(threads.to_string())
-        .args(p.read_type.mapping_args())
-        .arg(&ref_path)
-        .arg(reads_path)
-        .arg("-o")
-        .arg(&paf_path)
-        .stderr(std::process::Stdio::null())
-        .status()?;
-    if !status.success() {
-        return Err("minimap2 failed during consensus step".into());
-    }
+    let mut args: Vec<&str> = p.read_type.mapping_args().to_vec();
+    args.extend(["-c", "--secondary=no", "-v", "1"]);
+    crate::utils::run_minimap2(&args, threads, &ref_path, reads_path, &paf_path)?;
 
     // ---- 3. split alignments into window segments ------------------------
     let mut windows: Vec<Vec<Vec<Seg>>> = layouts
@@ -622,6 +598,7 @@ struct DpScratch {
     tb: Vec<u32>,
     rows: Vec<u32>,
     row_of: Vec<u32>,
+    js: Vec<u32>,
     indeg: Vec<u32>,
 }
 
@@ -696,19 +673,21 @@ impl Poa {
 
     /// Align `seq` globally to the part of the graph whose anchors lie in
     /// `[lo, hi]` (global in the read, free start/end in the graph subject to
-    /// the anchor limits).  Returns (node or -1, read position or -1) pairs.
+    /// the anchor limits).  The DP is banded: a node with backbone anchor `a`
+    /// is only paired with read positions within `BAND` of the linear
+    /// interpolation `(a - b0) * m / span`.  Returns (node or -1, read
+    /// position or -1) pairs.
     fn align(
         &self,
         seq: &[u8],
         order: &[u32],
-        lo: u32,
-        hi: u32,
-        start_max_anchor: u32,
-        end_min_anchor: u32,
+        (lo, hi, start_max_anchor, end_min_anchor): (u32, u32, u32, u32),
+        (b0, span): (u32, u32),
         sc: &mut DpScratch,
     ) -> Option<Vec<(i32, i32)>> {
+        const NEG: i32 = i32::MIN / 2;
+        const WW: usize = 2 * BAND + 2;
         let m = seq.len();
-        let w = m + 1;
         sc.rows.clear();
         sc.row_of.clear();
         sc.row_of.resize(self.base.len(), 0);
@@ -723,15 +702,27 @@ impl Poa {
         if nr == 0 {
             return None;
         }
+        // Row r holds the columns [js[r], js[r] + WW) of the DP; row 0 is the
+        // virtual start (h = j * GAP).
         sc.h.clear();
-        sc.h.resize((nr + 1) * w, i32::MIN / 2);
+        sc.h.resize((nr + 1) * WW, NEG);
         sc.tb.clear();
-        sc.tb.resize((nr + 1) * w, 0);
-        // op: 0 diag, 1 del (node only), 2 ins (read only)
-        for j in 0..w {
-            sc.h[j] = j as i32 * GAP;
-            sc.tb[j] = 2;
+        sc.tb.resize((nr + 1) * WW, 0);
+        sc.js.clear();
+        sc.js.push(0);
+        for r in 1..=nr {
+            let a = self.anchor[sc.rows[r - 1] as usize] as i64 - b0 as i64;
+            let c = (a * m as i64 / span.max(1) as i64).clamp(0, m as i64);
+            sc.js.push((c - BAND as i64).max(0) as u32);
         }
+        let js = std::mem::take(&mut sc.js);
+        let get = |h: &[i32], p: usize, j: usize| -> i32 {
+            if p == 0 {
+                return j as i32 * GAP;
+            }
+            let o = j.wrapping_sub(js[p] as usize);
+            if o < WW { h[p * WW + o] } else { NEG }
+        };
         let mut preds: Vec<u32> = Vec::with_capacity(8);
         for r in 1..=nr {
             let v = sc.rows[r - 1] as usize;
@@ -746,82 +737,73 @@ impl Poa {
                 preds.push(0);
             }
             let bv = self.base[v];
-            // column 0
-            {
-                let mut best = i32::MIN / 2;
-                let mut bp = 0u32;
-                for &p in &preds {
-                    let c = sc.h[p as usize * w] + GAP;
-                    if c > best {
-                        best = c;
-                        bp = p;
-                    }
-                }
-                sc.h[r * w] = best;
-                sc.tb[r * w] = (bp << 2) | 1;
-            }
-            for j in 1..w {
-                let s = if bv == seq[j - 1] && bv < 4 {
-                    MATCH
-                } else {
-                    MISMATCH
-                };
-                let mut best = i32::MIN / 2;
+            let j0 = js[r] as usize;
+            for j in j0..=(j0 + WW - 1).min(m) {
+                let mut best = NEG;
                 let mut code = 0u32;
-                for &p in &preds {
-                    let d = sc.h[p as usize * w + j - 1] + s;
-                    if d > best {
-                        best = d;
-                        code = p << 2;
+                if j > 0 {
+                    let s = if bv == seq[j - 1] && bv < 4 { MATCH } else { MISMATCH };
+                    for &p in &preds {
+                        let d = get(&sc.h, p as usize, j - 1) + s;
+                        if d > best {
+                            best = d;
+                            code = p << 2;
+                        }
                     }
                 }
                 for &p in &preds {
-                    let d = sc.h[p as usize * w + j] + GAP;
+                    let d = get(&sc.h, p as usize, j) + GAP;
                     if d > best {
                         best = d;
                         code = (p << 2) | 1;
                     }
                 }
-                let ins = sc.h[r * w + j - 1] + GAP;
-                if ins > best {
-                    best = ins;
-                    code = ((r as u32) << 2) | 2;
+                if j > j0 {
+                    let ins = sc.h[r * WW + j - 1 - j0] + GAP;
+                    if ins > best {
+                        best = ins;
+                        code = ((r as u32) << 2) | 2;
+                    }
                 }
-                sc.h[r * w + j] = best;
-                sc.tb[r * w + j] = code;
+                sc.h[r * WW + j - j0] = best;
+                sc.tb[r * WW + j - j0] = code;
             }
         }
         // best end
         let mut best_r = 0usize;
-        let mut best_s = i32::MIN;
-        for r in 1..=nr {
-            let v = sc.rows[r - 1] as usize;
-            if self.anchor[v] < end_min_anchor {
-                continue;
-            }
-            let s = sc.h[r * w + m];
-            if s > best_s {
-                best_s = s;
-                best_r = r;
-            }
-        }
-        if best_r == 0 {
+        let mut best_s = NEG;
+        for pass in 0..2 {
             for r in 1..=nr {
-                let s = sc.h[r * w + m];
+                let v = sc.rows[r - 1] as usize;
+                if pass == 0 && self.anchor[v] < end_min_anchor {
+                    continue;
+                }
+                let s = get(&sc.h, r, m);
                 if s > best_s {
                     best_s = s;
                     best_r = r;
                 }
             }
+            if best_r != 0 {
+                break;
+            }
+        }
+        if best_r == 0 {
+            sc.js = js;
+            return None;
         }
         // traceback
         let mut out: Vec<(i32, i32)> = Vec::with_capacity(m + 16);
         let (mut r, mut j) = (best_r, m);
         while r != 0 || j != 0 {
-            let code = sc.tb[r * w + j];
-            let op = code & 3;
+            if r == 0 {
+                out.push((-1, j as i32 - 1));
+                j -= 1;
+                continue;
+            }
+            let code = sc.tb[r * WW + j - js[r] as usize];
             let p = (code >> 2) as usize;
-            match op {
+            match code & 3 {
                 0 => {
                     out.push((sc.rows[r - 1] as i32, j as i32 - 1));
                     r = p;
@@ -837,6 +819,7 @@ impl Poa {
                 }
             }
         }
+        sc.js = js;
         out.reverse();
         Some(out)
     }
@@ -956,7 +939,7 @@ fn poa_window(poa: &mut Poa, sc: &mut DpScratch, draft: &[u8], layers: &[Layer])
         let hi = layer.e + SLACK;
         let start_max = layer.b + SLACK;
         let end_min = layer.e.saturating_sub(1).saturating_sub(SLACK);
-        let aln = poa.align(&layer.seq, &order, lo, hi, start_max, end_min, sc)?;
+        let aln = poa.align(&layer.seq, &order, (lo, hi, start_max, end_min), (layer.b, layer.e - layer.b), sc)?;
         poa.add_alignment(&layer.seq, &aln);
     }
     let order = poa.topo(&mut indeg)?;
