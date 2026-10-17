@@ -1,271 +1,141 @@
-use std::collections::HashSet;
+//! Plasmid rescue: reads that do not map to the primary assembly are assembled separately
+//! (they are rarely covered well enough to survive the main graph) and the resulting graph is
+//! merged into the main one.
+
+use crate::alignment_filtering::Overlap;
+use crate::cli::{OverlapOpts, ReadOpts};
+use crate::create_overlap_graph::OverlapGraph;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-#[derive(Debug, Default)]
-pub struct RescueStats {
-    pub input_read_count: usize,
-    pub mapped_read_count: usize,
-    pub rescued_read_count: usize,
-    pub rescued_read_bases: u64,
-    pub rescued_unitig_count: usize,
-    pub rescued_assembly_length: u64,
-    pub rescued_node_ids: HashSet<String>,
-    pub rescue_primary_reads: Option<PathBuf>,
+pub struct RescueResult {
+    /// Rescued reads (down-sampled for assembly), to be appended to the assembly reads.
+    pub reads: PathBuf,
+    /// Nodes of the rescue graph, used to report which unitigs come from the rescue.
+    pub node_ids: HashSet<String>,
 }
 
-pub fn run_rescue_stage(
-    filtered_reads: &Path,
-    improved_assembly: &Path,
-    existing_mapping_paf: Option<&Path>,
-    output_dir: &Path,
-    config: &crate::configs::AssembleConfig,
-    graph: &mut crate::create_overlap_graph::OverlapGraph,
-    overlaps: &mut std::collections::HashMap<(usize, usize), crate::alignment_filtering::Overlap>,
-) -> std::io::Result<RescueStats> {
-    let generated_paf = output_dir.join("rescue_mapping.paf");
-    let mapping_paf = if let Some(paf) = existing_mapping_paf {
-        paf
-    } else {
-        map_reads(
-            filtered_reads,
-            improved_assembly,
-            &generated_paf,
-            config.threads,
-            config.read_type,
-        )?;
-        &generated_paf
-    };
-    let mapped_reads = mapped_read_names(mapping_paf)?;
-    let rescue_path = output_dir.join("rescue_reads.fq");
-    let mut stats = write_rescue_reads(filtered_reads, &rescue_path, &mapped_reads)?;
-    println!("Reads considered for rescue: {}", stats.input_read_count);
-    println!(
-        "Reads mapped to primary assembly (excluded): {}",
-        stats.mapped_read_count
-    );
-    println!(
-        "Reads written to rescue_reads.fq: {}",
-        stats.rescued_read_count
-    );
-    println!("Rescue read bases: {}", stats.rescued_read_bases);
-
-    if stats.rescued_read_count == 0 {
-        println!("No poorly represented reads found; skipping rescue assembly.");
-        return Ok(stats);
-    }
-
-    let assembly_dir = output_dir.join("rescue_graph");
-    std::fs::create_dir_all(&assembly_dir)?;
-    let (_, improved_assembly_length) = fasta_stats(improved_assembly)?;
-    let genome_size = improved_assembly_length.clamp(1, u32::MAX as u64) as u32;
-    let rescue_target_coverage =
-        rescue_target_coverage(stats.rescued_read_bases, improved_assembly_length);
-    let rescue_bases_for_assembly = improved_assembly_length
-        .saturating_mul(u64::from(rescue_target_coverage))
-        .min(stats.rescued_read_bases);
-    println!(
-        "Rescue assembly target: {}× primary assembly length ({} bases) to include all {} unmapped bases",
-        rescue_target_coverage, rescue_bases_for_assembly, stats.rescued_read_bases
-    );
-    let rescue_paf = assembly_dir.join("rescue.paf");
-    let rescue_reads = crate::align_reads::align_reads(
-        &rescue_path,
-        config.threads.clamp(1, 4),
-        &rescue_paf,
-        &assembly_dir,
-        config.min_read_length.saturating_sub(1).clamp(1, 500),
-        config.min_base_quality,
-        Some(genome_size),
-        rescue_target_coverage,
-        &config.minimap_batch_size,
-        Some("0.001"),
-        Some("10,5000"),
-        config.read_type,
-    )?;
-    stats.rescue_primary_reads = Some(rescue_reads.primary_reads);
-    let rescue_overlaps = crate::alignment_filtering::run_alignment_filtering(
-        &rescue_paf,
-        &config.min_overlap_length,
-        &config.min_overlap_count,
-        &config.min_percent_identity,
-        &config.overhang_ratio,
-    )
-    .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))?
-    .overlaps;
-    let rescue_graph = crate::create_overlap_graph::run_create_overlap_graph(&rescue_overlaps)?;
-    stats.rescued_node_ids = rescue_graph.nodes.keys().cloned().collect();
-
-    let key_offset = overlaps
-        .keys()
-        .flat_map(|(query, target)| [*query, *target])
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1);
-    for ((query, target), overlap) in rescue_overlaps {
-        overlaps.insert(
-            (
-                query.saturating_add(key_offset),
-                target.saturating_add(key_offset),
-            ),
-            overlap,
-        );
-    }
-
-    for node_id in rescue_graph.nodes.keys() {
-        graph.add_node(node_id.clone());
-    }
-    for (node_id, node) in rescue_graph.nodes {
-        for edge in node.edges {
-            graph.add_edge(
-                &node_id,
-                &edge.target_id,
-                edge.edge_len,
-                edge.overlap_len,
-                edge.identity,
-            );
+/// Names of all reads with at least one alignment in a PAF.
+fn mapped_read_names(paf: &Path) -> std::io::Result<HashSet<String>> {
+    let mut names = HashSet::new();
+    for line in BufReader::new(File::open(paf)?).lines() {
+        if let Some(name) = line?.split('\t').next().filter(|n| !n.is_empty()) {
+            names.insert(name.to_string());
         }
     }
-    Ok(stats)
+    Ok(names)
 }
 
-fn rescue_target_coverage(rescued_bases: u64, assembly_length: u64) -> u32 {
-    if assembly_length == 0 {
-        return u32::MAX;
-    }
-    rescued_bases
-        .div_ceil(assembly_length)
-        .max(1)
-        .min(u32::MAX as u64) as u32
-}
-
-fn map_reads(
-    reads: &Path,
-    assembly: &Path,
-    paf: &Path,
-    threads: usize,
-    read_type: crate::cli::ReadType,
-) -> std::io::Result<()> {
-    let mut command = Command::new("minimap2");
-    for arg in read_type.mapping_args() {
-        command.arg(arg);
-    }
-    let status = command
-        .arg("-t")
-        .arg(threads.to_string())
-        .arg(assembly)
-        .arg(reads)
-        .arg("-o")
-        .arg(paf)
-        .status()?;
-    if !status.success() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "minimap2 failed during plasmid rescue read mapping",
-        ));
-    }
-    Ok(())
-}
-
-fn mapped_read_names(paf_path: &Path) -> std::io::Result<HashSet<String>> {
-    let reader = BufReader::new(File::open(paf_path)?);
-    let mut mapped_reads = HashSet::new();
-    for line in reader.lines() {
-        let line = line?;
-        let fields: Vec<_> = line.split('\t').collect();
-        if let Some(read_name) = fields.first().filter(|name| !name.is_empty()) {
-            mapped_reads.insert((*read_name).to_string());
+/// Write the reads that are not in `mapped`; returns (reads written, bases written).
+fn write_unmapped_reads(reads: &Path, out: &Path, mapped: &HashSet<String>) -> std::io::Result<(usize, u64)> {
+    let mut reader = crate::utils::open_fastq_reader(reads)?;
+    let mut writer = BufWriter::new(File::create(out)?);
+    let (mut count, mut bases) = (0, 0);
+    while let Some((header, seq, plus, qual)) = crate::utils::read_fastq_record(reader.as_mut())? {
+        let name = header.trim_start_matches('@').split_whitespace().next().unwrap_or_default();
+        if !mapped.contains(name) {
+            write!(writer, "{header}\n{seq}\n{plus}\n{qual}\n")?;
+            count += 1;
+            bases += seq.len() as u64;
         }
-    }
-    Ok(mapped_reads)
-}
-
-fn write_rescue_reads(
-    filtered_reads: &Path,
-    output_path: &Path,
-    mapped_reads: &HashSet<String>,
-) -> std::io::Result<RescueStats> {
-    let mut reader = crate::utils::open_fastq_reader(filtered_reads)?;
-    let mut writer = BufWriter::new(File::create(output_path)?);
-    let mut stats = RescueStats::default();
-
-    while let Some((header, sequence, plus, quality)) =
-        crate::utils::read_fastq_record(reader.as_mut())?
-    {
-        let read_name = header
-            .strip_prefix('@')
-            .unwrap_or(&header)
-            .split_whitespace()
-            .next()
-            .unwrap_or_default();
-        if !mapped_reads.contains(read_name) {
-            writeln!(writer, "{}\n{}\n{}\n{}", header, sequence, plus, quality)?;
-            stats.rescued_read_count += 1;
-            stats.rescued_read_bases += sequence.len() as u64;
-        } else {
-            stats.mapped_read_count += 1;
-        }
-        stats.input_read_count += 1;
     }
     writer.flush()?;
-    Ok(stats)
+    Ok((count, bases))
 }
 
-fn fasta_stats(path: &Path) -> std::io::Result<(usize, u64)> {
-    let reader = BufReader::new(File::open(path)?);
-    let mut unitig_count = 0;
-    let mut assembly_length = 0;
-    for line in reader.lines() {
-        let line = line?;
-        if line.starts_with('>') {
-            unitig_count += 1;
-        } else {
-            assembly_length += line.trim().len() as u64;
+/// Assemble the reads of `all_reads` that do not map to `assembly_fa` and add the result to
+/// `graph` / `overlaps`. Returns `None` if there are no such reads.
+pub fn run_rescue_stage(
+    all_reads: &Path,
+    assembly_fa: &Path,
+    out_dir: &Path,
+    reads: &ReadOpts,
+    overlap: &OverlapOpts,
+    graph: &mut OverlapGraph,
+    overlaps: &mut HashMap<(usize, usize), Overlap>,
+) -> Result<Option<RescueResult>, Box<dyn std::error::Error>> {
+    let mapping_paf = out_dir.join("rescue_mapping.paf");
+    crate::utils::run_minimap2(reads.read_type.mapping_args(), reads.threads, assembly_fa, all_reads, &mapping_paf)?;
+    let rescue_fq = out_dir.join("rescue_reads.fq");
+    let (count, bases) = write_unmapped_reads(all_reads, &rescue_fq, &mapped_read_names(&mapping_paf)?)?;
+    println!("Reads not mapping to the primary assembly: {count} ({bases} bases)");
+    if count == 0 {
+        println!("No poorly represented reads found; skipping rescue assembly.");
+        return Ok(None);
+    }
+
+    // assemble the unmapped reads with a coverage budget that includes all of them
+    let assembly_len: u64 = BufReader::new(File::open(assembly_fa)?)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|l| !l.starts_with('>'))
+        .map(|l| l.trim().len() as u64)
+        .sum();
+    let target_coverage = rescue_target_coverage(bases, assembly_len);
+    println!("Rescue assembly target: {target_coverage}x primary assembly length");
+    let dir = out_dir.join("rescue_graph");
+    std::fs::create_dir_all(&dir)?;
+    let rescue_opts = ReadOpts {
+        reads_fq: rescue_fq.to_string_lossy().into_owned(),
+        threads: reads.threads.clamp(1, 4),
+        paf: "rescue.paf".into(),
+        min_read_length: reads.min_read_length.saturating_sub(1).clamp(1, 500),
+        genome_size: Some(assembly_len.clamp(1, u32::MAX as u64) as u32),
+        target_coverage,
+        minimap2_f: Some("0.001".into()),
+        minimap2_u: Some("10,5000".into()),
+        ..reads.clone()
+    };
+    let rescued = crate::align_reads::align_reads(&rescue_opts, &dir)?;
+    let rescue_overlaps = crate::alignment_filtering::run_alignment_filtering(&dir.join("rescue.paf"), overlap)?.overlaps;
+    let rescue_graph = crate::create_overlap_graph::run_create_overlap_graph(&rescue_overlaps)?;
+
+    // merge: overlap keys are shifted so that they cannot collide with the main ones
+    let key_offset = overlaps.keys().flat_map(|&(q, t)| [q, t]).max().map_or(0, |m| m + 1);
+    overlaps.extend(rescue_overlaps.into_iter().map(|((q, t), o)| ((q + key_offset, t + key_offset), o)));
+    let node_ids = rescue_graph.nodes.keys().cloned().collect();
+    for id in rescue_graph.nodes.keys() {
+        graph.add_node(id.clone());
+    }
+    for (id, node) in rescue_graph.nodes {
+        for e in node.edges {
+            graph.add_edge(&id, &e.target_id, e.edge_len, e.overlap_len, e.identity);
         }
     }
-    Ok((unitig_count, assembly_length))
+    Ok(Some(RescueResult { reads: rescued.primary_reads, node_ids }))
+}
+
+/// Coverage (x the primary assembly length) needed to include all rescued bases.
+fn rescue_target_coverage(rescued_bases: u64, assembly_len: u64) -> u32 {
+    if assembly_len == 0 {
+        return u32::MAX;
+    }
+    rescued_bases.div_ceil(assembly_len).clamp(1, u32::MAX as u64) as u32
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{mapped_read_names, rescue_target_coverage, write_rescue_reads};
-    use std::fs;
-    use std::path::PathBuf;
+    use super::*;
 
     #[test]
     fn rescues_only_reads_without_any_alignment() {
-        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!("rescue_reads_test_{}", std::process::id()));
-        fs::create_dir_all(&directory).unwrap();
-        let input = directory.join("reads.fq");
-        let output = directory.join("rescue_reads.fq");
-        let paf = directory.join("mapping.paf");
-        fs::write(
-            &input,
-            "@mapped_full\nACGTACGT\n+\nIIIIIIII\n@mapped_partial\nACGTACGT\n+\nIIIIIIII\n@unmapped\nACGTACGT\n+\nIIIIIIII\n",
-        )
-        .unwrap();
-        fs::write(
+        let dir = std::env::temp_dir().join(format!("rescue_reads_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (input, output, paf) = (dir.join("reads.fq"), dir.join("rescue_reads.fq"), dir.join("mapping.paf"));
+        let rec = |n: &str| format!("@{n}\nACGTACGT\n+\nIIIIIIII\n");
+        std::fs::write(&input, rec("mapped_full") + &rec("mapped_partial") + &rec("unmapped")).unwrap();
+        std::fs::write(
             &paf,
-            "mapped_full\t8\t0\t8\t+\tunitig_0\t100\t0\t8\t8\t8\t60\n\
-             mapped_partial\t8\t0\t1\t+\tunitig_1\t100\t0\t1\t1\t1\t60\n",
+            "mapped_full\t8\t0\t8\t+\tunitig_0\t100\t0\t8\t8\t8\t60\nmapped_partial\t8\t0\t1\t+\tunitig_1\t100\t0\t1\t1\t1\t60\n",
         )
         .unwrap();
         let mapped = mapped_read_names(&paf).unwrap();
-
-        let stats = write_rescue_reads(&input, &output, &mapped).unwrap();
-        assert_eq!(stats.rescued_read_count, 1);
-        assert_eq!(stats.rescued_read_bases, 8);
-        assert_eq!(stats.input_read_count, 3);
-        assert_eq!(stats.mapped_read_count, 2);
-        let result = fs::read_to_string(output).unwrap();
-        assert!(result.contains("@unmapped"));
-        assert!(!result.contains("@mapped_full"));
-        assert!(!result.contains("@mapped_partial"));
-        fs::remove_dir_all(directory).unwrap();
+        assert_eq!(write_unmapped_reads(&input, &output, &mapped).unwrap(), (1, 8));
+        let result = std::fs::read_to_string(output).unwrap();
+        assert!(result.contains("@unmapped") && !result.contains("@mapped"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
