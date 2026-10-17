@@ -1,7 +1,5 @@
 /target
-/evaluation/test_data
-/evaluation/venv
-/evaluation/output
+/evaluation
 /.snakemake
 /.pixi
 /.test
