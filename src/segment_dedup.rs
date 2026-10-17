@@ -1,62 +1,27 @@
 use crate::compress_graph::CompressedGraph;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader};
 use std::path::Path;
-use std::process::Command;
 
+/// Remove unitigs that are (>95%) contained in a longer one. `fasta` holds the current unitigs
+/// and is only used as mapping input. Returns the number of removed unitigs.
 pub fn remove_contained_segments(
     assembly: &mut CompressedGraph,
-    fasta_path: &Path,
-    output_dir: &Path,
+    fasta: &Path,
+    work_dir: &Path,
     threads: usize,
 ) -> io::Result<usize> {
     if assembly.unitigs.is_empty() {
         return Ok(0);
     }
-
-    let paf_path = output_dir.join("assembly_containment.paf");
-    let status = Command::new("minimap2")
-        .arg("-x")
-        .arg("asm10")
-        .arg("-DP")
-        .arg("-t")
-        .arg(threads.to_string())
-        .arg(fasta_path)
-        .arg(fasta_path)
-        .arg("-o")
-        .arg(&paf_path)
-        .status()?;
-    if !status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "minimap2 failed during assembly segment containment filtering",
-        ));
-    }
-
-    let contained = contained_unitig_ids(BufReader::new(File::open(paf_path)?))?;
+    let paf = work_dir.join("assembly_containment.paf");
+    crate::utils::run_minimap2(&["-x", "asm10", "-DP"], threads, fasta, fasta, &paf)?;
+    let contained = contained_unitig_ids(BufReader::new(File::open(paf)?))?;
     let before = assembly.unitigs.len();
-    assembly
-        .unitigs
-        .retain(|unitig| !contained.contains(&unitig.id));
-    let retained: HashSet<_> = assembly.unitigs.iter().map(|unitig| unitig.id).collect();
-    assembly
-        .edges
-        .retain(|edge| retained.contains(&edge.from) && retained.contains(&edge.to));
-
-    let mut fasta = File::create(fasta_path)?;
-    for unitig in &assembly.unitigs {
-        let sequence = unitig.fasta_seq.as_deref().unwrap_or("");
-        writeln!(
-            fasta,
-            ">unitig_{} len={}bp topology={}",
-            unitig.id,
-            sequence.len(),
-            unitig.topology
-        )?;
-        writeln!(fasta, "{sequence}")?;
-    }
-
+    assembly.unitigs.retain(|u| !contained.contains(&u.id));
+    let retained: HashSet<_> = assembly.unitigs.iter().map(|u| u.id).collect();
+    assembly.edges.retain(|e| retained.contains(&e.from) && retained.contains(&e.to));
     Ok(before - assembly.unitigs.len())
 }
 
