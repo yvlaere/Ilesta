@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::process::Command;
 
 /// Opens a FASTQ file for buffered reading, automatically decompressing if gzipped.
 pub fn open_fastq_reader(path: &Path) -> std::io::Result<Box<dyn BufRead>> {
@@ -190,6 +191,46 @@ pub fn delete_nodes_and_edges(graph: &mut OverlapGraph, nodes_to_delete: &HashSe
     }
 }
 
+/// Check if the bigraph is synchronized:
+/// 1. Every node has a reverse complement.
+/// 2. Ingoing edges of every node correspond to outgoing edges of its reverse complement.
+pub fn check_synchronization(g: &OverlapGraph) {
+    for n in g.nodes.keys() {
+        // compute reverse complement node
+        let n_rc = rc_node(n);
+
+        // check that the reverse complement exists
+        assert!(
+            g.nodes.contains_key(&n_rc),
+            "Reverse complement not found for {}. The bigraph is not synchronized.",
+            n
+        );
+
+        // check that every outgoing edge has a counterpart in the reverse complement node
+        if let Some(node) = g.nodes.get(n) {
+            for e in &node.edges {
+                let t = &e.target_id;
+                let t_rc = rc_node(t);
+
+                // get the reverse complement node for t_rc
+                if let Some(t_rc_node) = g.nodes.get(&t_rc) {
+                    // Check if there's a matching edge from t_rc to n_rc
+                    assert!(
+                        t_rc_node.edges.iter().any(|e| e.target_id == n_rc),
+                        "Corresponding edge not found for {}. The bigraph is not synchronized.",
+                        n
+                    );
+                } else {
+                    panic!(
+                        "Reverse complement node {} missing for target {}. The bigraph is not synchronized.",
+                        t_rc, t
+                    );
+                }
+            }
+        }
+    }
+}
+
 pub fn rev_comp(seq: &str) -> String {
     seq.chars()
         .rev()
@@ -221,5 +262,32 @@ mod tests {
         assert_eq!(record.2, "+read1");
         assert_eq!(record.3, "IIII@@@@");
         assert!(read_fastq_record(&mut reader).unwrap().is_none());
+    }
+}
+
+/// Run `minimap2 <args> -t <threads> <target> <query> -o <out>` and wait for it.
+pub fn run_minimap2(
+    args: &[&str],
+    threads: usize,
+    target: &Path,
+    query: &Path,
+    out: &Path,
+) -> std::io::Result<()> {
+    let status = Command::new("minimap2")
+        .args(args)
+        .arg("-t")
+        .arg(threads.max(1).to_string())
+        .arg(target)
+        .arg(query)
+        .arg("-o")
+        .arg(out)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "minimap2 failed ({status}) on {}",
+            query.display()
+        )))
     }
 }
