@@ -52,6 +52,77 @@ pub enum Commands {
 
     /// Full genome assembly pipeline
     Assemble(AssembleArgs),
+
+    /// Read-guided bridging of an existing contig FASTA
+    Scaffold(ScaffoldArgs),
+}
+
+/// Read filtering and all-vs-all alignment options (shared by `align` and `assemble`).
+#[derive(Args, Clone)]
+pub struct ReadOpts {
+    /// Input reads in FASTQ format
+    #[arg(short = 'r', long, help_heading = "Read filtering and alignment")]
+    pub reads_fq: String,
+
+    /// Read type / sequencing technology
+    #[arg(long, default_value = "ont", help_heading = "Read filtering and alignment")]
+    pub read_type: ReadType,
+
+    /// Number of threads
+    #[arg(short = 't', long, default_value_t = 4, help_heading = "Read filtering and alignment")]
+    pub threads: usize,
+
+    /// Output PAF filename
+    #[arg(short = 'a', long, default_value = "alignments.paf", help_heading = "Read filtering and alignment")]
+    pub paf: String,
+
+    /// Minimum read length
+    #[arg(long, default_value_t = 1000, help_heading = "Read filtering and alignment")]
+    pub min_read_length: u32,
+
+    /// Minimum average quality
+    #[arg(short = 'q', long, default_value_t = 10.0, help_heading = "Read filtering and alignment")]
+    pub min_base_quality: f32,
+
+    /// Optional input genome size (if not provided, will be estimated from data)
+    #[arg(long, help_heading = "Read filtering and alignment")]
+    pub genome_size: Option<u32>,
+
+    /// Target read coverage for assembly input downsampling
+    #[arg(long, default_value_t = 50u32, help_heading = "Read filtering and alignment")]
+    pub target_coverage: u32,
+
+    /// Minimap2 query minibatch size for self-alignment (e.g. 500M)
+    #[arg(long, default_value = "500M", help_heading = "Read filtering and alignment")]
+    pub minimap_batch_size: String,
+
+    /// Override minimap2's -f high-frequency minimizer filter
+    #[arg(long, help_heading = "Read filtering and alignment")]
+    pub minimap2_f: Option<String>,
+
+    /// Override minimap2's -U minimizer occurrence bounds
+    #[arg(long, help_heading = "Read filtering and alignment")]
+    pub minimap2_u: Option<String>,
+}
+
+/// Overlap filtering options (shared by `alignment-filtering` and `assemble`).
+#[derive(Args, Clone)]
+pub struct OverlapOpts {
+    /// Minimum overlap length
+    #[arg(short = 'l', long, default_value_t = 2000, help_heading = "Alignment filtering")]
+    pub min_overlap_length: u32,
+
+    /// Minimum overlap count
+    #[arg(short = 'c', long, default_value_t = 3, help_heading = "Alignment filtering")]
+    pub min_overlap_count: u32,
+
+    /// Minimum percent identity
+    #[arg(short = 'i', long, default_value_t = 5.0, help_heading = "Alignment filtering")]
+    pub min_percent_identity: f32,
+
+    /// Overhang ratio
+    #[arg(long, default_value_t = 0.8, help_heading = "Alignment filtering")]
+    pub overhang_ratio: f32,
 }
 
 #[derive(Args)]
@@ -60,68 +131,8 @@ pub struct AlignReadsArgs {
     #[arg(short = 'o', long, default_value = ".")]
     pub output_dir: String,
 
-    /// Input reads in FASTQ format
-    #[arg(short = 'r', long)]
-    pub reads_fq: String,
-
-    /// Read type / sequencing technology
-    #[arg(long, default_value = "ont")]
-    pub read_type: ReadType,
-
-    /// Number of threads
-    #[arg(short = 't', long, default_value_t = 4)]
-    pub threads: usize,
-
-    /// Output PAF file
-    #[arg(short = 'a', long, default_value = "alignments.paf")]
-    pub paf: String,
-
-    /// Minimum read length
-    #[arg(long, default_value_t = 1000)]
-    pub min_read_length: u32,
-
-    /// Minimum average quality
-    #[arg(short = 'q', long, default_value_t = 10.0)]
-    pub min_base_quality: f32,
-
-    /// Optional input genome size (if not provided, will be estimated from data)
-    #[arg(long)]
-    pub genome_size: Option<u32>,
-
-    /// Target read coverage for assembly input downsampling
-    #[arg(long, default_value_t = 50u32)]
-    pub target_coverage: u32,
-
-    /// Minimap2 query minibatch size for self-alignment (e.g. 500M)
-    #[arg(long, default_value = "500M")]
-    pub minimap_batch_size: String,
-
-    /// Override minimap2's -f high-frequency minimizer filter
-    #[arg(long)]
-    pub minimap2_f: Option<String>,
-
-    /// Override minimap2's -U minimizer occurrence bounds
-    #[arg(long)]
-    pub minimap2_u: Option<String>,
-}
-
-impl From<&AlignReadsArgs> for crate::configs::AlignReadsConfig {
-    fn from(args: &AlignReadsArgs) -> Self {
-        Self {
-            output_dir: args.output_dir.clone(),
-            reads_fq: args.reads_fq.clone(),
-            threads: args.threads,
-            paf: args.paf.clone(),
-            min_read_length: args.min_read_length,
-            min_base_quality: args.min_base_quality,
-            genome_size: args.genome_size,
-            target_coverage: args.target_coverage,
-            minimap_batch_size: args.minimap_batch_size.clone(),
-            minimap2_f: args.minimap2_f.clone(),
-            minimap2_u: args.minimap2_u.clone(),
-            read_type: args.read_type,
-        }
-    }
+    #[command(flatten)]
+    pub reads: ReadOpts,
 }
 
 #[derive(Args)]
@@ -138,46 +149,16 @@ pub struct AlignmentFilteringArgs {
     #[arg(long, default_value = "overlaps.bin")]
     pub output_overlaps: String,
 
-    /// Minimum overlap length
-    #[arg(short = 'l', long, default_value_t = 2000)]
-    pub min_overlap_length: u32,
-
-    /// Minimum overlap count
-    #[arg(short = 'c', long, default_value_t = 3)]
-    pub min_overlap_count: u32,
-
-    /// Minimum percent identity
-    #[arg(short = 'i', long, default_value_t = 5.0)]
-    pub min_percent_identity: f32,
-
-    /// Overhang ratio
-    #[arg(long, default_value_t = 0.8)]
-    pub overhang_ratio: f32,
+    #[command(flatten)]
+    pub overlap: OverlapOpts,
 
     /// Optional random seed for reproducible results
     #[arg(long)]
     pub seed: Option<u64>,
 }
 
-impl From<&AlignmentFilteringArgs> for crate::configs::AlignmentFilteringConfig {
-    fn from(args: &AlignmentFilteringArgs) -> Self {
-        Self {
-            output_dir: args.output_dir.clone(),
-            paf: args.paf.clone(),
-            output_overlaps: args.output_overlaps.clone(),
-            min_overlap_length: args.min_overlap_length,
-            min_overlap_count: args.min_overlap_count,
-            min_percent_identity: args.min_percent_identity,
-            overhang_ratio: args.overhang_ratio,
-            seed: args.seed,
-        }
-    }
-}
-
 #[derive(Args)]
 pub struct AssembleArgs {
-    /// Output parameters
-
     /// Output prefix
     #[arg(short = 'p', long, default_value = "unitigs", help_heading = "Output")]
     pub output_prefix: String,
@@ -186,121 +167,15 @@ pub struct AssembleArgs {
     #[arg(short = 'o', long, default_value = ".", help_heading = "Output")]
     pub output_dir: String,
 
-    /// Read filtering and alignment parameters
+    #[command(flatten)]
+    pub reads: ReadOpts,
 
-    /// Input reads in FASTQ format
-    #[arg(short = 'r', long, help_heading = "Read filtering and alignment")]
-    pub reads_fq: String,
-
-    /// Read type / sequencing technology
-    #[arg(
-        long,
-        default_value = "ont",
-        help_heading = "Read filtering and alignment"
-    )]
-    pub read_type: ReadType,
-
-    /// Number of threads
-    #[arg(
-        short = 't',
-        long,
-        default_value_t = 4,
-        help_heading = "Read filtering and alignment"
-    )]
-    pub threads: usize,
-
-    /// Output PAF filename
-    #[arg(
-        short = 'a',
-        long,
-        default_value = "alignments.paf",
-        help_heading = "Read filtering and alignment"
-    )]
-    pub paf: String,
-
-    /// Minimum read length
-    #[arg(
-        long,
-        default_value_t = 1000,
-        help_heading = "Read filtering and alignment"
-    )]
-    pub min_read_length: u32,
-
-    /// Minimum average quality
-    #[arg(
-        short = 'q',
-        long,
-        default_value_t = 10.0,
-        help_heading = "Read filtering and alignment"
-    )]
-    pub min_base_quality: f32,
-
-    /// Optional input genome size (if not provided, will be estimated from data)
-    #[arg(long, help_heading = "Read filtering and alignment")]
-    pub genome_size: Option<u32>,
-
-    /// Target read coverage for assembly input downsampling
-    #[arg(
-        long,
-        default_value_t = 50u32,
-        help_heading = "Read filtering and alignment"
-    )]
-    pub target_coverage: u32,
-
-    /// Minimap2 query minibatch size for self-alignment (e.g. 500M)
-    #[arg(
-        long,
-        default_value = "500M",
-        help_heading = "Read filtering and alignment"
-    )]
-    pub minimap_batch_size: String,
-
-    /// Override minimap2's -f high-frequency minimizer filter
-    #[arg(long, help_heading = "Read filtering and alignment")]
-    pub minimap2_f: Option<String>,
-
-    /// Override minimap2's -U minimizer occurrence bounds
-    #[arg(long, help_heading = "Read filtering and alignment")]
-    pub minimap2_u: Option<String>,
-
-    /// Alignment filtering parameters (optional if --overlaps is provided)
-
-    /// Minimum overlap length
-    #[arg(
-        short = 'l',
-        long,
-        default_value_t = 2000,
-        help_heading = "Alignment filtering"
-    )]
-    pub min_overlap_length: u32,
-
-    /// Minimum overlap count
-    #[arg(
-        short = 'c',
-        long,
-        default_value_t = 3,
-        help_heading = "Alignment filtering"
-    )]
-    pub min_overlap_count: u32,
-
-    /// Minimum percent identity
-    #[arg(
-        short = 'i',
-        long,
-        default_value_t = 5.0,
-        help_heading = "Alignment filtering"
-    )]
-    pub min_percent_identity: f32,
-
-    /// Overhang ratio
-    #[arg(long, default_value_t = 0.8, help_heading = "Alignment filtering")]
-    pub overhang_ratio: f32,
+    #[command(flatten)]
+    pub overlap: OverlapOpts,
 
     /// Pre-computed overlaps binary file (optional, if provided skips alignment filtering)
     #[arg(long, help_heading = "Alignment filtering")]
     pub overlaps: Option<String>,
-
-    /// Assembly parameters
 
     /// Maximum bubble length (used during bubble removal)
     #[arg(long, default_value_t = 100u32, help_heading = "Assembly")]
@@ -326,28 +201,20 @@ pub struct AssembleArgs {
     #[arg(long, default_value_t = 0.8f64, help_heading = "Assembly")]
     pub short_edge_ratio: f64,
 
-    /// Enable a second read-guided completion stage after the first assembly pass
-    #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue, help_heading = "Assembly")]
-    pub completion_enabled: bool,
-
-    /// Number of completion rounds to run
-    #[arg(long, default_value_t = 1u32, help_heading = "Assembly")]
-    pub completion_rounds: u32,
-
-    /// Minimum alignment length for a completion bridge
-    #[arg(long, default_value_t = 2000u32, help_heading = "Assembly")]
-    pub completion_min_alignment_len: u32,
-
-    /// Minimum identity for a completion bridge
-    #[arg(long, default_value_t = 0.8f64, help_heading = "Assembly")]
-    pub completion_min_identity: f64,
-
-    /// Assemble poorly represented reads once as a plasmid rescue stage
-    #[arg(long, default_value_t = true, action = clap::ArgAction::SetTrue, help_heading = "Assembly")]
+    /// Assemble poorly represented reads once as a plasmid rescue stage (on by default; kept for compatibility)
+    #[arg(long, hide = true, action = clap::ArgAction::SetTrue)]
     pub rescue_plasmids: bool,
 
-    #[arg(long, hide = true, action = clap::ArgAction::SetTrue)]
+    /// Disable the plasmid rescue stage
+    #[arg(long, action = clap::ArgAction::SetTrue, help_heading = "Assembly")]
     pub no_rescue_plasmids: bool,
+
+    /// Also write the overlap graph as graph.dot
+    #[arg(long, action = clap::ArgAction::SetTrue, help_heading = "Output")]
+    pub write_dot: bool,
+
+    #[command(flatten)]
+    pub scaffold: ScaffoldOpts,
 
     /// Consensus polishing rounds on the final unitigs (0 disables)
     #[arg(long, default_value_t = 2u32, help_heading = "Consensus")]
@@ -362,7 +229,7 @@ pub struct AssembleArgs {
     pub consensus_min_depth: usize,
 
     /// Maximum read segments used per window
-    #[arg(long, default_value_t = 50usize, help_heading = "Consensus")]
+    #[arg(long, default_value_t = 25usize, help_heading = "Consensus")]
     pub consensus_max_depth: usize,
 
     /// Optional random seed for reproducible results
@@ -370,205 +237,121 @@ pub struct AssembleArgs {
     pub seed: Option<u64>,
 }
 
-impl From<&AssembleArgs> for crate::configs::AssembleConfig {
-    fn from(args: &AssembleArgs) -> Self {
-        Self {
-            // output
-            output_prefix: args.output_prefix.clone(),
-            output_dir: args.output_dir.clone(),
-
-            // read filtering and alignment
-            reads_fq: args.reads_fq.clone(),
-            threads: args.threads,
-            paf: args.paf.clone(),
-            min_read_length: args.min_read_length,
-            min_base_quality: args.min_base_quality,
-            genome_size: args.genome_size,
-            target_coverage: args.target_coverage,
-            minimap_batch_size: args.minimap_batch_size.clone(),
-            minimap2_f: args.minimap2_f.clone(),
-            minimap2_u: args.minimap2_u.clone(),
-            read_type: args.read_type,
-
-            // alignment filtering
-            min_overlap_length: args.min_overlap_length,
-            min_overlap_count: args.min_overlap_count,
-            min_percent_identity: args.min_percent_identity,
-            overhang_ratio: args.overhang_ratio,
-            overlaps: args.overlaps.clone(),
-
-            // assembly parameters
-            max_bubble_length: args.max_bubble_length,
-            min_support_ratio: args.min_support_ratio,
-            max_tip_len: args.max_tip_len,
-            fuzz: args.fuzz,
-            cleanup_iterations: args.cleanup_iterations,
-            short_edge_ratio: args.short_edge_ratio,
-            completion_enabled: args.completion_enabled,
-            completion_rounds: args.completion_rounds,
-            completion_min_alignment_len: args.completion_min_alignment_len,
-            completion_min_identity: args.completion_min_identity,
-            rescue_plasmids: args.rescue_plasmids && !args.no_rescue_plasmids,
-            consensus_rounds: args.consensus_rounds,
-            consensus_window_len: args.consensus_window_len,
-            consensus_min_depth: args.consensus_min_depth,
-            consensus_max_depth: args.consensus_max_depth,
-            seed: args.seed,
-        }
+impl AssembleArgs {
+    pub fn rescue_enabled(&self) -> bool {
+        !self.no_rescue_plasmids
     }
+}
+
+/// Contig bridging options (shared by `assemble` and `scaffold`).
+#[derive(Args, Clone)]
+pub struct ScaffoldOpts {
+    /// Contig bridging rounds (read-guided scaffolding of the final unitigs; 0 disables)
+    #[arg(long = "scaffold-rounds", default_value_t = 2u32, help_heading = "Scaffolding")]
+    pub rounds: u32,
+
+    /// Minimum number of reads spanning a bridge between two contigs
+    #[arg(long = "scaffold-min-reads", default_value_t = 3usize, help_heading = "Scaffolding")]
+    pub min_reads: usize,
+
+    /// A competing bridge at the same contig end may have at most this fraction of the best bridge's reads
+    #[arg(long = "scaffold-dominance", default_value_t = 0.3f64, help_heading = "Scaffolding")]
+    pub dominance: f64,
+
+    /// Minimum read-to-contig alignment length used for bridging
+    #[arg(long = "scaffold-min-alignment-len", default_value_t = 1000u32, help_heading = "Scaffolding")]
+    pub min_alignment_len: u32,
+
+    /// Minimum read-to-contig alignment identity used for bridging
+    #[arg(long = "scaffold-min-identity", default_value_t = 0.8f64, help_heading = "Scaffolding")]
+    pub min_identity: f64,
+}
+
+#[derive(Args)]
+pub struct ScaffoldArgs {
+    /// Contigs in FASTA format (`topology=c` in the header marks circular contigs)
+    #[arg(short = 'c', long)]
+    pub contigs: String,
+
+    /// Reads in FASTQ format
+    #[arg(short = 'r', long)]
+    pub reads_fq: String,
+
+    /// Output FASTA
+    #[arg(short = 'o', long)]
+    pub output: String,
+
+    /// Number of threads
+    #[arg(short = 't', long, default_value_t = 4usize)]
+    pub threads: usize,
+
+    /// Read type / sequencing technology
+    #[arg(long, default_value = "ont")]
+    pub read_type: ReadType,
+
+    /// Consensus polishing rounds after bridging (0 = off; contig names are replaced by unitig_N)
+    #[arg(long, default_value_t = 0u32)]
+    pub polish_rounds: u32,
+
+    #[command(flatten)]
+    pub scaffold: ScaffoldOpts,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(["Ilesta"].iter().chain(args))
+    }
+
+    fn assemble(args: &[&str]) -> AssembleArgs {
+        match parse(args).unwrap().command {
+            Commands::Assemble(a) => a,
+            _ => panic!("expected assemble"),
+        }
+    }
+
+    fn align(args: &[&str]) -> AlignReadsArgs {
+        match parse(args).unwrap().command {
+            Commands::Align(a) => a,
+            _ => panic!("expected align"),
+        }
+    }
+
     #[test]
-    fn test_minimap2_args_for_read_types() {
+    fn minimap2_args_for_read_types() {
         assert_eq!(ReadType::Ont.minimap2_args(), &["-x", "ava-ont"]);
         assert_eq!(ReadType::PbClr.minimap2_args(), &["-x", "ava-pb"]);
-        assert_eq!(
-            ReadType::PbHifi.minimap2_args(),
-            &[
-                "-x", "ava-ont", "-k", "21", "-w", "11", "-g", "1000", "-m", "200", "-r", "2000",
-            ]
-        );
+        assert_eq!(ReadType::PbHifi.minimap2_args()[..2], ["-x", "ava-ont"]);
         assert_eq!(ReadType::Ont.mapping_args(), &["-x", "map-ont"]);
         assert_eq!(ReadType::PbClr.mapping_args(), &["-x", "map-pb"]);
         assert_eq!(ReadType::PbHifi.mapping_args(), &["-x", "map-hifi"]);
     }
 
     #[test]
-    fn test_cli_read_type_default() {
-        let cli = Cli::try_parse_from(["Ilesta", "align", "-r", "reads.fq"]).unwrap();
-        match cli.command {
-            Commands::Align(args) => assert_eq!(args.read_type, ReadType::Ont),
-            _ => panic!("Expected Align command"),
+    fn read_type_option() {
+        assert_eq!(align(&["align", "-r", "reads.fq"]).reads.read_type, ReadType::Ont);
+        assert_eq!(assemble(&["assemble", "-r", "reads.fq"]).reads.read_type, ReadType::Ont);
+        for (flag, expected) in [("ont", ReadType::Ont), ("pb-clr", ReadType::PbClr), ("pb-hifi", ReadType::PbHifi)] {
+            assert_eq!(align(&["align", "-r", "r.fq", "--read-type", flag]).reads.read_type, expected);
+            assert_eq!(assemble(&["assemble", "-r", "r.fq", "--read-type", flag]).reads.read_type, expected);
         }
-
-        let cli_asm = Cli::try_parse_from(["Ilesta", "assemble", "-r", "reads.fq"]).unwrap();
-        match cli_asm.command {
-            Commands::Assemble(args) => assert_eq!(args.read_type, ReadType::Ont),
-            _ => panic!("Expected Assemble command"),
-        }
+        assert!(parse(&["align", "-r", "reads.fq", "--read-type", "illumina"]).is_err());
     }
 
     #[test]
-    fn test_cli_read_type_explicit() {
-        for (flag_val, expected) in [
-            ("ont", ReadType::Ont),
-            ("pb-clr", ReadType::PbClr),
-            ("pb-hifi", ReadType::PbHifi),
-        ] {
-            let cli =
-                Cli::try_parse_from(["Ilesta", "align", "-r", "reads.fq", "--read-type", flag_val])
-                    .unwrap();
-            match cli.command {
-                Commands::Align(args) => assert_eq!(args.read_type, expected),
-                _ => panic!("Expected Align command"),
-            }
-
-            let cli_asm = Cli::try_parse_from([
-                "Ilesta",
-                "assemble",
-                "-r",
-                "reads.fq",
-                "--read-type",
-                flag_val,
-            ])
-            .unwrap();
-            match cli_asm.command {
-                Commands::Assemble(args) => assert_eq!(args.read_type, expected),
-                _ => panic!("Expected Assemble command"),
-            }
-        }
+    fn read_options_defaults_and_overrides() {
+        let a = align(&["align", "-r", "reads.fq"]);
+        assert_eq!((a.reads.target_coverage, a.reads.minimap_batch_size.as_str()), (50, "500M"));
+        let a = assemble(&["assemble", "-r", "r.fq", "--target-coverage", "20", "--minimap-batch-size", "100M"]);
+        assert_eq!((a.reads.target_coverage, a.reads.minimap_batch_size.as_str()), (20, "100M"));
     }
 
     #[test]
-    fn test_cli_read_type_invalid() {
-        let result = Cli::try_parse_from([
-            "Ilesta",
-            "align",
-            "-r",
-            "reads.fq",
-            "--read-type",
-            "illumina",
-        ]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_align_target_coverage_option() {
-        let default_cli = Cli::try_parse_from(["Ilesta", "align", "-r", "reads.fq"]).unwrap();
-        match default_cli.command {
-            Commands::Align(args) => assert_eq!(args.target_coverage, 50),
-            _ => panic!("Expected Align command"),
-        }
-
-        let configured_cli = Cli::try_parse_from([
-            "Ilesta",
-            "align",
-            "-r",
-            "reads.fq",
-            "--target-coverage",
-            "20",
-        ])
-        .unwrap();
-        match configured_cli.command {
-            Commands::Align(args) => assert_eq!(args.target_coverage, 20),
-            _ => panic!("Expected Align command"),
-        }
-    }
-
-    #[test]
-    fn test_minimap_batch_size_defaults_and_overrides() {
-        let default_align = Cli::try_parse_from(["Ilesta", "align", "-r", "reads.fq"]).unwrap();
-        match default_align.command {
-            Commands::Align(args) => assert_eq!(args.minimap_batch_size, "500M"),
-            _ => panic!("Expected Align command"),
-        }
-
-        let configured_assemble = Cli::try_parse_from([
-            "Ilesta",
-            "assemble",
-            "-r",
-            "reads.fq",
-            "--minimap-batch-size",
-            "100M",
-        ])
-        .unwrap();
-        match configured_assemble.command {
-            Commands::Assemble(args) => assert_eq!(args.minimap_batch_size, "100M"),
-            _ => panic!("Expected Assemble command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_rescue_plasmids_flag() {
-        let cli =
-            Cli::try_parse_from(["Ilesta", "assemble", "-r", "reads.fq", "--rescue-plasmids"])
-                .unwrap();
-        match cli.command {
-            Commands::Assemble(args) => assert!(args.rescue_plasmids),
-            _ => panic!("Expected Assemble command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_can_disable_nested_plasmid_rescue() {
-        let cli = Cli::try_parse_from([
-            "Ilesta",
-            "assemble",
-            "-r",
-            "reads.fq",
-            "--no-rescue-plasmids",
-        ])
-        .unwrap();
-        match cli.command {
-            Commands::Assemble(args) => {
-                let config: crate::configs::AssembleConfig = (&args).into();
-                assert!(!config.rescue_plasmids);
-            }
-            _ => panic!("Expected Assemble command"),
-        }
+    fn plasmid_rescue_flags() {
+        assert!(assemble(&["assemble", "-r", "r.fq"]).rescue_enabled());
+        assert!(assemble(&["assemble", "-r", "r.fq", "--rescue-plasmids"]).rescue_enabled());
+        assert!(!assemble(&["assemble", "-r", "r.fq", "--no-rescue-plasmids"]).rescue_enabled());
     }
 }

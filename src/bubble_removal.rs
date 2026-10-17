@@ -172,7 +172,7 @@ pub fn remove_bubbles(graph: &mut OverlapGraph, max_bubble_len: usize, min_suppo
                 for node in reached_a.intersection(&reached_b) {
                     let d = depth_a.get(*node).unwrap_or(&usize::MAX)
                         + depth_b.get(*node).unwrap_or(&usize::MAX);
-                    meetings.push((node.clone(), d));
+                    meetings.push((*node, d));
                 }
 
                 // skip if no common node was reached
