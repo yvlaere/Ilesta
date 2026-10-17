@@ -14,9 +14,6 @@ use std::io::BufWriter;
 
 /// Struct to hold a read
 struct Read {
-    id: usize,
-    name: String,
-    length: u32,
     per_base_coverage: Vec<u16>,
     coverage_start: u32,
     coverage_end: u32,
@@ -36,7 +33,6 @@ struct Alignment {
     target_end: i64,
     num_matching: u32,
     alignment_block_length: u32,
-    mapq: u8,
 }
 
 // Implement methods for Alignment (kind of like class methods)
@@ -59,7 +55,6 @@ impl Alignment {
             target_end: fields[8].parse::<i64>().ok()?,
             num_matching: fields[9].parse().ok()?,
             alignment_block_length: fields[10].parse().ok()?,
-            mapq: fields[11].parse().ok()?,
         })
     }
 
@@ -120,7 +115,6 @@ fn classify_alignment(
     query_id: usize,
     target_id: usize,
     overlaps: &mut HashMap<(usize, usize), Overlap>,
-    _max_overhang: u32,
     overhang_ratio: f64,
     reads: &Vec<Read>,
     min_overlap_length: u32,
@@ -159,22 +153,13 @@ fn classify_alignment(
     let overhang_right = std::cmp::min(l1 - e1, l2 - e2);
     let overhang = overhang_left + overhang_right;
 
-    // miniasm uses a hard cutoff on max overhang, we don't for now
-    //if overhang_left > max_overhang as i64 || overhang_right > max_overhang as i64 {
-    //    return AlignmentType::InternalMatch;
-    //}
-
     // longest overlap length (max aligned spans on either read)
     let overlap_length1 = e1 - b1;
     let overlap_length2 = e2 - b2;
     let overlap_length = std::cmp::max(overlap_length1, overlap_length2) as f64;
 
-    // decide overhang threshold: max_overhang or maplen * overhang_ratio
-    // we only use the ratio for now
-    let overhang_threshold = (overlap_length * overhang_ratio).ceil() as i64;
-    //let max_overhang_i64 = max_overhang as i64;
-    //let allowed_overhang = std::cmp::min(max_overhang_i64, overhang_threshold);
-    let allowed_overhang = overhang_threshold;
+    // allowed overhang: overlap length * overhang_ratio
+    let allowed_overhang = (overlap_length * overhang_ratio).ceil() as i64;
 
     // classification of the overlap
 
@@ -314,11 +299,9 @@ fn classify_alignment(
 /// Filter PAF file based on overlap quality criteria
 pub fn run_alignment_filtering(
     paf_in: &std::path::Path,
-    min_overlap_length: &u32,
-    min_overlap_count: &u32,
-    min_percent_identity: &f32,
-    overhang_ratio: &f32,
+    opts: &crate::cli::OverlapOpts,
 ) -> Result<AlignmentFilteringOutput, Box<dyn std::error::Error>> {
+    let crate::cli::OverlapOpts { min_overlap_length, min_overlap_count, min_percent_identity, overhang_ratio } = opts;
     // Setup data structures
     // read name to read id mapping
     let mut read_name2read_id: HashMap<String, usize> = HashMap::new();
@@ -386,9 +369,6 @@ pub fn run_alignment_filtering(
                     alignment_ids_per_read.push(HashSet::new());
                     // create new read object
                     reads.push(Read {
-                        id,
-                        name: record.query_name.clone(),
-                        length: record.query_length,
                         per_base_coverage: vec![0; record.query_length as usize],
                         coverage_start: 0,
                         coverage_end: record.query_length,
@@ -406,9 +386,6 @@ pub fn run_alignment_filtering(
                     alignment_ids_per_read.push(HashSet::new());
                     // create new read object
                     reads.push(Read {
-                        id,
-                        name: record.target_name.clone(),
-                        length: record.target_length,
                         per_base_coverage: vec![0; record.target_length as usize],
                         coverage_start: 0,
                         coverage_end: record.target_length,
@@ -505,13 +482,11 @@ pub fn run_alignment_filtering(
 
     // classify alignments and update contained reads set
     for ((query_id, target_id), alignment) in &alignments {
-        //let alignment_type = match classify_alignment(alignment, *query_id, *target_id, &mut overlaps, *max_overhang, *overhang_ratio, &reads, min_overlap_length) {
         let _alignment_type = match classify_alignment(
             alignment,
             *query_id,
             *target_id,
             &mut overlaps,
-            4000000000,
             (*overhang_ratio) as f64,
             &reads,
             *min_overlap_length,
