@@ -112,27 +112,6 @@ impl OverlapGraph {
         }
     }
 
-    /// Add a bridge edge between two oriented nodes when read support indicates a likely connection.
-    pub fn add_bridge_edge(
-        &mut self,
-        from_id: &str,
-        to_id: &str,
-        edge_len: u32,
-        overlap_len: u32,
-        identity: f64,
-    ) -> bool {
-        self.add_node(from_id.to_string());
-        self.add_node(to_id.to_string());
-        if let Some(node) = self.nodes.get_mut(from_id) {
-            if node.edges.iter().any(|e| e.target_id == to_id) {
-                return false;
-            }
-            node.add_edge(to_id, edge_len, overlap_len, identity);
-            return true;
-        }
-        false
-    }
-
     /// Write the overlap graph to a DOT file for visualization
     pub fn write_dot<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
         // helper functions
@@ -205,21 +184,6 @@ impl OverlapGraph {
         }
 
         writeln!(w, "}}")?;
-        Ok(())
-    }
-}
-
-pub struct AlignmentFilteringOutput {
-    pub overlaps: HashMap<(usize, usize), Overlap>,
-}
-
-impl AlignmentFilteringOutput {
-    // serialize the overlaps
-    pub fn serialize_overlaps(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let file = File::create(path)?;
-        let writer = BufWriter::new(file);
-        bincode::serialize_into(writer, &self.overlaps)?;
-
         Ok(())
     }
 }
