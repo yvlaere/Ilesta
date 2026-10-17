@@ -37,6 +37,32 @@ pub struct CompressedGraph {
 }
 
 impl CompressedGraph {
+    /// Write all unitig sequences as FASTA.
+    pub fn write_fasta(&self, path: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+        let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
+        for u in &self.unitigs {
+            let seq = u.fasta_seq.as_deref().unwrap_or("");
+            writeln!(out, ">unitig_{} len={}bp topology={}\n{seq}", u.id, seq.len(), u.topology)?;
+        }
+        out.flush()
+    }
+
+    /// Read contigs from a FASTA file (no edges); `topology=c` in a header marks a circular contig.
+    pub fn from_fasta(path: &std::path::Path) -> std::io::Result<CompressedGraph> {
+        let mut unitigs: Vec<Unitig> = Vec::new();
+        for line in std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(path)?)) {
+            let line = line?;
+            if let Some(header) = line.strip_prefix('>') {
+                let topology = if header.contains("topology=c") { 'c' } else { 'l' };
+                unitigs.push(Unitig { id: unitigs.len(), members: Vec::new(), fasta_seq: Some(String::new()), topology });
+            } else if let Some(seq) = unitigs.last_mut().and_then(|u| u.fasta_seq.as_mut()) {
+                seq.push_str(line.trim());
+            }
+        }
+        Ok(CompressedGraph { unitigs, edges: Vec::new() })
+    }
+
     pub fn write_gfa(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let mut file = std::fs::File::create(path)?;
         use std::io::Write;
@@ -192,8 +218,7 @@ fn parse_node_id(node_id: &str) -> Result<(&str, u32, u32, char), String> {
 pub fn compress_unitigs(
     graph: &OverlapGraph,
     overlaps: &HashMap<(usize, usize), Overlap>,
-    fastq_path: &std::path::PathBuf,
-    fasta_path: &std::path::Path,
+    fastq_path: &std::path::Path,
 ) -> CompressedGraph {
     // 1) create a map of indegrees
     let mut indegree: HashMap<String, usize> = HashMap::new();
@@ -364,9 +389,6 @@ pub fn compress_unitigs(
     let mut unitig_ends: HashMap<usize, (String, String)> = HashMap::new();
     // (start_node_id, end_node_id)
 
-    fn node_ori(node_id: &str) -> char {
-        node_id.chars().last().unwrap()
-    }
 
     let mut node_to_unitig: HashMap<String, usize> = HashMap::new();
     for u in &unitigs {
@@ -478,130 +500,72 @@ pub fn compress_unitigs(
         edges.sort_unstable_by_key(|edge| (edge.from, edge.to, edge.from_ori, edge.to_ori));
     }
 
-    // load fastq sequences
+    // load the sequences of the reads used by the unitigs
+    let needed: HashSet<&str> = unitigs
+        .iter()
+        .flat_map(|u| u.members.iter())
+        .filter_map(|m| parse_node_id(&m.node_id).ok().map(|(name, ..)| name))
+        .collect();
     println!("Loading FASTQ sequences from {}...", fastq_path.display());
-    let fastq_seqs = load_fastq_sequences(fastq_path).unwrap();
+    let fastq_seqs = load_fastq_sequences(fastq_path, &needed).unwrap();
 
-    // generate fasta sequences for unitigs and write to fasta_path
     println!("Generating unitig sequences and writing to FASTA...");
     for unitig in unitigs.iter_mut() {
-        let seq = unitig_sequence(unitig, graph, fastq_seqs.clone()).unwrap();
-        unitig.fasta_seq = Some(seq);
+        unitig.fasta_seq = Some(unitig_sequence(unitig, &fastq_seqs).unwrap());
     }
     set_unitig_topologies(&mut unitigs, overlaps);
-
-    // write to fasta file
-    {
-        let mut fasta_file = std::fs::File::create(fasta_path).unwrap();
-        for unitig in unitigs.iter() {
-            let seq = unitig.fasta_seq.as_ref().unwrap();
-            let header = format!(
-                ">unitig_{} len={}bp topology={}\n",
-                unitig.id,
-                seq.len(),
-                unitig.topology
-            );
-            use std::io::Write;
-            fasta_file.write_all(header.as_bytes()).unwrap();
-            fasta_file.write_all(seq.as_bytes()).unwrap();
-            fasta_file.write_all(b"\n").unwrap();
-        }
-    }
 
     CompressedGraph { unitigs, edges }
 }
 
 fn load_fastq_sequences(
-    fastq_path: &std::path::PathBuf,
-) -> Result<HashMap<String, String>, String> {
-    let mut seq_map: HashMap<String, String> = HashMap::new();
-
-    let mut reader = match crate::utils::open_fastq_reader(fastq_path) {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(format!(
-                "failed to open FASTQ file '{}': {}",
-                fastq_path.display(),
-                e
-            ));
+    fastq_path: &std::path::Path,
+    needed: &HashSet<&str>,
+) -> std::io::Result<HashMap<String, String>> {
+    let mut seq_map = HashMap::new();
+    let mut reader = utils::open_fastq_reader(fastq_path)?;
+    while let Some((header, seq, _, _)) = utils::read_fastq_record(reader.as_mut())? {
+        let id = header[1..].split_whitespace().next().unwrap_or("");
+        if needed.contains(id) {
+            seq_map.insert(id.to_string(), seq);
         }
-    };
-    while let Some((header, seq, _, _)) =
-        crate::utils::read_fastq_record(reader.as_mut()).map_err(|error| error.to_string())?
-    {
-        let id = header[1..].split_whitespace().next().unwrap().to_string();
-        seq_map.insert(id, seq);
     }
-
     Ok(seq_map)
 }
 
-/// Build nucleotide sequence for `unitig` by concatenating node sequences and
-/// removing overlaps recorded in UnitigMember.edge.(target, edge_len).
+/// Build the nucleotide sequence of `unitig` by concatenating node sequences and
+/// removing the overlaps recorded in UnitigMember.edge.(target, edge_len).
 pub fn unitig_sequence(
     unitig: &Unitig,
-    _graph: &OverlapGraph,
-    fastq_seqs: HashMap<String, String>,
+    fastq_seqs: &HashMap<String, String>,
 ) -> Result<String, String> {
-    if unitig.members.is_empty() {
-        println!("unitig has no members; cannot infer sequence");
-    }
-
-    // Helper to get sequence for a node id
     let get_seq = |node_id: &str| -> Result<String, String> {
-        let (read_name, read_start, read_end, ori) = parse_node_id(node_id)
-            .map_err(|e| format!("get_seq error for node_id '{}': {}", node_id, e))?;
-
-        let full_seq = fastq_seqs.get(read_name).ok_or_else(|| {
-            format!(
-                "sequence for read_id '{}' not found in FASTQ sequences",
-                read_name
-            )
-        })?;
-
-        let start = read_start as usize;
-        let end = read_end as usize;
-
-        // slice as bytes, then convert back to String
-        let slice = &full_seq[start..end];
-
-        match ori {
-            '+' => Ok(slice.to_string()),
-            '-' => Ok(utils::rev_comp(slice)), // assuming rev_comp takes &str and returns String
-            _ => Err(format!(
-                "invalid orientation '{}' in node id '{}'",
-                ori, node_id
-            )),
-        }
+        let (read_name, start, end, ori) = parse_node_id(node_id)?;
+        let full_seq = fastq_seqs
+            .get(read_name)
+            .ok_or_else(|| format!("sequence for read '{read_name}' not found in FASTQ"))?;
+        let slice = &full_seq[start as usize..end as usize];
+        Ok(if ori == '+' { slice.to_string() } else { utils::rev_comp(slice) })
     };
 
     let mut out = String::new();
-
-    // For each member, append the prefix untill the target (skip overlap bases)
     for member in &unitig.members {
-        // an edge describes the target node and the edge length of the original node to reach that target
+        // the last member has no target and contributes its full sequence
         let (target_id, edge_len) = &member.edge;
         let seq = get_seq(&member.node_id)?;
-        let edge_len_usize = *edge_len as usize;
-
         if target_id.is_empty() {
-            // This is the last node, append the entire sequence
             out.push_str(&seq);
         } else {
-            if edge_len_usize > seq.len() {
+            let n = *edge_len as usize;
+            if n > seq.len() {
                 return Err(format!(
-                    "edge length ({}) larger than seq length ({}) for node {} to target {}",
-                    edge_len_usize,
+                    "edge length ({n}) larger than seq length ({}) for node {} to target {target_id}",
                     seq.len(),
-                    member.node_id,
-                    target_id
+                    member.node_id
                 ));
             }
-
-            // Append the non-overlapping prefix
-            out.push_str(&seq[..edge_len_usize]);
+            out.push_str(&seq[..n]);
         }
     }
-
     Ok(out)
 }
