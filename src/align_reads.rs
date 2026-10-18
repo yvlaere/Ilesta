@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 /// Bases in the first subsample used to estimate the genome size.  The subsample
 /// is doubled until the estimated coverage is high enough, so small genomes
 /// never pay for an all-vs-all alignment of the full data set.
-const ESTIMATION_START_BASES: u64 = 50_000_000;
+const ESTIMATION_START_BASES: u64 = 100_000_000;
 /// Minimum coverage of the subsample for a reliable genome size estimate.
-const ESTIMATION_MIN_COVERAGE: f64 = 10.0;
+const ESTIMATION_MIN_COVERAGE: f64 = 20.0;
 
 pub struct AlignReadsResult {
     pub primary_reads: PathBuf,

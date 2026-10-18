@@ -122,13 +122,16 @@ fn classify_alignment(
     // overlaps are a subset of alignments where (in theory) two read edges, one from each read, are part of the alignment
     // this function tries to differentiate between proper overlaps, internal matches, and containments
 
-    // change overlap coordinates based on read coverage
-    let query_start = std::cmp::max(r.query_start, reads[query_id].coverage_start as i64);
-    let query_end = std::cmp::min(r.query_end, reads[query_id].coverage_end as i64);
-    let target_start = std::cmp::max(r.target_start, reads[target_id].coverage_start as i64);
-    let target_end = std::cmp::min(r.target_end, reads[target_id].coverage_end as i64);
-    let query_length = (reads[query_id].coverage_end - reads[query_id].coverage_start) as i64;
-    let target_length = (reads[target_id].coverage_end - reads[target_id].coverage_start) as i64;
+    // change overlap coordinates based on read coverage; all coordinates are relative to the
+    // coverage-trimmed read (the node sequence is `read[coverage_start..coverage_end]`)
+    let (qcs, qce) = (reads[query_id].coverage_start as i64, reads[query_id].coverage_end as i64);
+    let (tcs, tce) = (reads[target_id].coverage_start as i64, reads[target_id].coverage_end as i64);
+    let query_start = std::cmp::max(r.query_start, qcs) - qcs;
+    let query_end = std::cmp::min(r.query_end, qce) - qcs;
+    let target_start = std::cmp::max(r.target_start, tcs) - tcs;
+    let target_end = std::cmp::min(r.target_end, tce) - tcs;
+    let query_length = qce - qcs;
+    let target_length = tce - tcs;
 
     // using naming convention corresponding with miniasm paper
     let b1 = query_start;
