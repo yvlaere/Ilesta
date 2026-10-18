@@ -1,7 +1,7 @@
 // Read filtering, genome size estimation and all-vs-all alignment before assembly
 
 use crate::cli::ReadOpts;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 const ESTIMATION_START_BASES: u64 = 100_000_000;
 /// Minimum coverage of the subsample for a reliable genome size estimate.
 const ESTIMATION_MIN_COVERAGE: f64 = 20.0;
+/// Alignments shorter than this (on either read) do not count towards the coverage estimate.
+const ESTIMATION_MIN_ALIGNMENT: u64 = 2_000;
 
 pub struct AlignReadsResult {
     pub primary_reads: PathBuf,
@@ -108,37 +110,53 @@ fn align_all_vs_all(reads: &Path, paf: &Path, opts: &ReadOpts) -> std::io::Resul
 
 /// Estimate coverage and genome size from a minimap2 all-vs-all PAF.
 ///
-/// minimap2's `ava` presets report every overlapping read pair only once, so an
-/// overlap adds aligned bases to *both* reads.
+/// minimap2's `ava` presets report every overlapping read pair only once, so an overlap adds
+/// aligned bases to *both* reads. The depth of a read is its aligned bases divided by its
+/// length (about the coverage minus one); the coverage is the **median** over the reads.
+/// A mean is dominated by high-copy elements (multi-copy plasmids, concatemer reads) and
+/// repeats: in one benchmark dataset 10% of the longest reads had a depth of 120x against 11x
+/// for the chromosome, which made the mean-based genome size 4x too small.
 fn estimate_genome_size(paf: &Path) -> std::io::Result<Option<(f64, u64)>> {
-    let mut seen = HashSet::new();
-    let mut total_bases: u64 = 0;
-    let mut total_aligned: u64 = 0;
-    for line in BufReader::new(File::open(paf)?).lines() {
-        let line = line?;
+    Ok(estimate_from_paf(BufReader::new(File::open(paf)?)))
+}
+
+fn estimate_from_paf(paf: impl BufRead) -> Option<(f64, u64)> {
+    // read name -> (length, aligned bases)
+    let mut reads: HashMap<String, (u64, u64)> = HashMap::new();
+    let mut add = |name: &str, len: u64, aligned: u64| {
+        if let Some(r) = reads.get_mut(name) {
+            r.1 += aligned;
+        } else {
+            reads.insert(name.to_string(), (len, aligned));
+        }
+    };
+    for line in paf.lines().map_while(Result::ok) {
         let f: Vec<&str> = line.split('\t').collect();
         if f.len() < 9 {
             continue;
         }
         let n = |i: usize| f[i].parse::<u64>().ok();
-        let (Some(qlen), Some(qs), Some(qe), Some(tlen), Some(ts), Some(te)) =
-            (n(1), n(2), n(3), n(6), n(7), n(8))
+        let (Some(qlen), Some(qs), Some(qe), Some(tlen), Some(ts), Some(te)) = (n(1), n(2), n(3), n(6), n(7), n(8))
         else {
             continue;
         };
-        if seen.insert(f[0].to_string()) {
-            total_bases += qlen;
+        let (qa, ta) = (qe.saturating_sub(qs), te.saturating_sub(ts));
+        // short alignments are mostly repeats and spurious hits
+        if qa.min(ta) < ESTIMATION_MIN_ALIGNMENT {
+            continue;
         }
-        if seen.insert(f[5].to_string()) {
-            total_bases += tlen;
-        }
-        total_aligned += qe.saturating_sub(qs) + te.saturating_sub(ts);
+        add(f[0], qlen, qa);
+        add(f[5], tlen, ta);
     }
-    if total_bases == 0 || total_aligned == 0 {
-        return Ok(None);
+    if reads.is_empty() {
+        return None;
     }
-    let coverage = total_aligned as f64 / total_bases as f64;
-    Ok(Some((coverage, (total_bases as f64 / coverage) as u64)))
+    let total_bases: u64 = reads.values().map(|r| r.0).sum();
+    let mut depths: Vec<f64> = reads.values().map(|&(len, aligned)| aligned as f64 / len.max(1) as f64).collect();
+    depths.sort_by(f64::total_cmp);
+    // a read at coverage c overlaps (c - 1) others at each position
+    let coverage = depths[depths.len() / 2] + 1.0;
+    Some((coverage, (total_bases as f64 / coverage) as u64))
 }
 
 pub fn align_reads(opts: &ReadOpts, out_dir: &Path) -> std::io::Result<AlignReadsResult> {
@@ -221,4 +239,54 @@ pub fn align_reads(opts: &ReadOpts, out_dir: &Path) -> std::io::Result<AlignRead
         primary_reads: primary,
         filtered_reads: filtered_all,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn rec(q: &str, t: &str, len: u64) -> String {
+        format!("{q}\t10000\t0\t{len}\t+\t{t}\t10000\t0\t{len}\t{len}\t{len}\t60\n")
+    }
+
+    /// 40 reads of 10 kb tiling a genome with 4 neighbours each side (depth ~ 9), plus
+    /// high-copy "concatemer" reads that overlap each other all the time.
+    fn paf(with_hub: bool) -> String {
+        let mut s = String::new();
+        for i in 0..40 {
+            for j in 1..=4 {
+                if i + j < 40 {
+                    s += &rec(&format!("r{i}"), &format!("r{}", i + j), 5_000);
+                }
+            }
+        }
+        if with_hub {
+            for i in 0..8 {
+                for j in 0..8 {
+                    for _ in 0..30 {
+                        if i != j {
+                            s += &rec(&format!("h{i}"), &format!("h{j}"), 9_000);
+                        }
+                    }
+                }
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn genome_size_estimate_ignores_high_copy_reads() {
+        let (cov, size) = estimate_from_paf(Cursor::new(paf(false))).unwrap();
+        let (hub_cov, hub_size) = estimate_from_paf(Cursor::new(paf(true))).unwrap();
+        assert!((cov - hub_cov).abs() < 1.0, "{cov} vs {hub_cov}");
+        // 40 reads of 10 kb at ~4.5x -> ~90 kb; the hub reads add 80 kb of reads, not of genome
+        assert!((size as f64 - 90_000.0).abs() < 25_000.0, "{size}");
+        assert!(hub_size < 200_000, "{hub_size}");
+    }
+
+    #[test]
+    fn short_alignments_are_ignored() {
+        assert!(estimate_from_paf(Cursor::new(rec("a", "b", 500))).is_none());
+    }
 }
