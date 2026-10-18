@@ -221,6 +221,7 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
         ))
     })?;
     println!("Primary unitigs: {}", compressed.unitigs.len());
+    report_unitigs("primary", &compressed);
 
     let mut rescued_nodes = HashSet::new();
     if args.rescue_enabled() {
@@ -244,6 +245,7 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
                 rescued_nodes = rescue.node_ids;
                 compressed = compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads);
                 println!("Unitigs after rescue: {}", compressed.unitigs.len());
+                report_unitigs("after rescue", &compressed);
             }
             Ok::<_, Box<dyn Error>>(())
         })?;
@@ -254,6 +256,7 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
         segment_dedup::remove_contained_segments(&mut compressed, &out_path, out_dir, threads)
     })?;
     println!("Contained unitigs removed: {removed}");
+    report_unitigs("after dedup", &compressed);
 
     if args.scaffold.rounds > 0 {
         let stats = utils::timed_step("Bridge unitigs", || {
@@ -270,6 +273,7 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
             "Bridges applied: {}, circularised: {}",
             stats.accepted, stats.circularised
         );
+        report_unitigs("after bridging", &compressed);
     }
     if args.consensus_rounds > 0 {
         let params = consensus::ConsensusParams {
@@ -322,6 +326,19 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
     }
     println!("Assembly complete.");
     Ok(())
+}
+
+/// Log unitig count, total length and the largest unitigs, so a lost replicon can be traced to a stage.
+fn report_unitigs(stage: &str, graph: &compress_graph::CompressedGraph) {
+    let mut lens: Vec<(usize, usize, char)> = graph
+        .unitigs
+        .iter()
+        .map(|u| (u.fasta_seq.as_ref().map_or(0, String::len), u.id, u.topology))
+        .collect();
+    lens.sort_unstable_by(|a, b| b.cmp(a));
+    let total: usize = lens.iter().map(|l| l.0).sum();
+    let largest: Vec<String> = lens.iter().take(4).map(|(l, id, t)| format!("unitig_{id}={l}{t}")).collect();
+    println!("Unitigs {stage}: {} ({total} bp); largest: {}", lens.len(), largest.join(", "));
 }
 
 #[cfg(test)]

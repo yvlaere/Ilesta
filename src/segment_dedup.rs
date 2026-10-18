@@ -4,6 +4,11 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 
+/// Minimum fraction of matching bases (matches / alignment block) of an alignment that counts as containment.
+const MIN_IDENTITY: f64 = 0.8;
+/// Removed unitigs of at least this length are reported (replicons, not rescue fragments).
+const REPORT_MIN_LEN: u64 = 20_000;
+
 /// Remove unitigs that are (>95%) contained in a longer one. `fasta` holds the current unitigs
 /// and is only used as mapping input. Returns the number of removed unitigs.
 pub fn remove_contained_segments(
@@ -37,6 +42,13 @@ fn contained_unitig_ids(reader: impl BufRead) -> io::Result<HashSet<usize>> {
             ));
         }
 
+        // Only real alignments count: with `-P` minimap2 also reports long, loose chains between
+        // repeat copies (a few percent matching bases) that would cover most of a plasmid.
+        let (matches, block) = (parse_paf_number(fields[9])?, parse_paf_number(fields[10])?);
+        if block == 0 || (matches as f64) < MIN_IDENTITY * block as f64 {
+            continue;
+        }
+
         let query_length = parse_paf_number(fields[1])?;
         let query_start = parse_paf_number(fields[2])?;
         let query_end = parse_paf_number(fields[3])?;
@@ -67,6 +79,12 @@ fn contained_unitig_ids(reader: impl BufRead) -> io::Result<HashSet<usize>> {
         {
             continue;
         }
+        if alignment.query_length >= REPORT_MIN_LEN {
+            let covered = covered_query_fraction(&mut alignment.intervals, alignment.query_length);
+            println!("  removing {query_name} ({} bp): {:.1}% covered by {target_name} ({} bp)",
+                alignment.query_length, 100.0 * covered, alignment.target_length);
+        }
+
         if let Some(id) = query_name
             .strip_prefix("unitig_")
             .and_then(|name| name.parse().ok())
@@ -131,6 +149,8 @@ mod tests {
             "unitig_9\t100\t0\t99\t+\tunitig_9\t100\t0\t99\t99\t99\t60\n",
             "unitig_10\t100\t0\t99\t+\tunitig_11\t100\t0\t99\t99\t99\t60\n",
             "unitig_11\t100\t0\t99\t+\tunitig_10\t100\t0\t99\t99\t99\t60\n",
+            // loose chain between repeat copies: 99% of the query is spanned, 2% of it matches
+            "unitig_12\t100\t0\t99\t+\tunitig_13\t200\t20\t119\t2\t99\t0\n",
         );
 
         let contained = contained_unitig_ids(Cursor::new(paf)).unwrap();

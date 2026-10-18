@@ -38,6 +38,10 @@ const OVERLAP_TRIM: usize = 300;
 const MIN_ANCHOR_LEN: usize = 2 * FLANK + 400;
 /// Bases by which a chain must beat the best single alignment of the read.
 const MIN_CHAIN_GAIN: i64 = FLANK as i64;
+/// A repeat contig is only dropped after it has been resolved if it is at most this long: a
+/// resolved repeat is a copy that reads span (IS elements, rRNA operons, prophages). Anything
+/// larger is a replicon (plasmid) that merely ends in a repeat and must never be discarded.
+const MAX_REPEAT_DROP: usize = 20_000;
 /// Maximum number of alignments per read considered for chaining.
 const MAX_HITS_PER_READ: usize = 48;
 
@@ -658,11 +662,15 @@ fn plan_bridges(
         plan.stats.circularised += circ as usize;
         plan.removed.extend(nodes.iter().map(|e| e.0));
         plan.scaffolds.push(Scaffold { seq, circular: circ, parts: nodes });
-    }
+    } 
 
     // ---- repeat contigs whose copies are all resolved are dropped ----
     for (&r, &used) in &inner_used {
         if anchors[r] || plan.removed.contains(&r) {
+            continue;
+        }
+        if seqs[r].len() > MAX_REPEAT_DROP {
+            println!("  keeping repeat contig {r} ({} bp): too long to be a resolved repeat", seqs[r].len());
             continue;
         }
         let sig: Vec<Vec<OEnd>> = [false, true]
@@ -672,6 +680,7 @@ fn plan_bridges(
             .collect();
         let copies = sig.iter().map(Vec::len).max().unwrap_or(0).max(1);
         if sig.iter().flatten().all(|e| anchors[e.0]) && used >= copies {
+            println!("  dropping resolved repeat contig {r} ({} bp)", seqs[r].len());
             plan.removed.insert(r);
         }
     }
