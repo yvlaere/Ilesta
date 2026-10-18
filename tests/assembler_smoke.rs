@@ -60,13 +60,22 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
-    assert!(
-        String::from_utf8_lossy(&result.stderr).contains("[M::mm_idx_gen"),
-        "rescue minimap2 diagnostics were not streamed to stderr"
-    );
     let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(stderr.contains("-f 0.001"));
-    assert!(stderr.contains("-U 10,5000"));
+    assert!(
+        stderr.is_empty(),
+        "minimap2 diagnostics should not be forwarded to stderr: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("[20") && line.contains("Z] ")),
+        "pipeline step timestamps were not reported"
+    );
+    assert!(
+        !stdout.contains("[M::"),
+        "minimap2 diagnostics should not be forwarded to stdout"
+    );
     for artifact in [
         "filtered_all.fq",
         "filtered.fq",
@@ -124,7 +133,6 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
             Some(gfa_topology)
         );
     }
-    let stdout = String::from_utf8_lossy(&result.stdout);
     let rescued_unitig_count = stdout
         .lines()
         .find_map(|line| {

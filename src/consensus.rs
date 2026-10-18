@@ -107,14 +107,16 @@ pub fn polish_graph(
     stats.bases_before = contigs.iter().map(|c| c.seq.len()).sum();
 
     for round in 1..=params.rounds {
-        println!("Consensus round {}/{}...", round, params.rounds);
-        let round_stats = polish_round(&mut contigs, reads_path, work_dir, params, round)?;
+        let round_stats = crate::utils::timed_step(
+            &format!("Consensus round {round}/{}", params.rounds),
+            || polish_round(&mut contigs, reads_path, work_dir, params, round),
+        )?;
         stats.rounds_run += 1;
         stats.windows_total = round_stats.windows_total;
         stats.windows_changed += round_stats.windows_changed;
         stats.windows_unsupported = round_stats.windows_unsupported;
         println!(
-            "  windows: {} total, {} changed, {} without enough support",
+            "Consensus windows: {} total, {} changed, {} without enough support",
             round_stats.windows_total, round_stats.windows_changed, round_stats.windows_unsupported
         );
         if round_stats.windows_changed == 0 {

@@ -29,23 +29,50 @@ fn main() -> Result<(), Box<dyn Error>> {
             let out_dir = Path::new(&args.output_dir);
             std::fs::create_dir_all(out_dir)?;
             check_exists(&args.reads.reads_fq)?;
-            align_reads::align_reads(&args.reads, out_dir)?;
+            utils::timed_step("Read filtering and alignment", || {
+                align_reads::align_reads(&args.reads, out_dir)
+            })?;
         }
         Commands::AlignmentFiltering(args) => {
             utils::set_seed(args.seed);
             let out_dir = Path::new(&args.output_dir);
             std::fs::create_dir_all(out_dir)?;
-            let out = alignment_filtering::run_alignment_filtering(&out_dir.join(&args.paf), &args.overlap)?;
-            out.serialize_overlaps(&args.output_overlaps)?;
-            println!("Wrote overlaps to {}", args.output_overlaps);
+            utils::timed_step("Filter alignments and write overlaps", || {
+                let out = alignment_filtering::run_alignment_filtering(
+                    &out_dir.join(&args.paf),
+                    &args.overlap,
+                )?;
+                out.serialize_overlaps(&args.output_overlaps)?;
+                println!(
+                    "Filtered overlaps: {} ({})",
+                    out.overlaps.len(),
+                    args.output_overlaps
+                );
+                Ok::<_, Box<dyn Error>>(())
+            })?;
         }
         Commands::Scaffold(args) => {
             let out = Path::new(&args.output);
-            let work_dir = out.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+            let work_dir = out
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
             let reads = Path::new(&args.reads_fq);
             let mut graph = compress_graph::CompressedGraph::from_fasta(Path::new(&args.contigs))?;
-            let stats = scaffold::scaffold_graph(&mut graph, reads, work_dir, &args.scaffold, args.threads, args.read_type)?;
-            println!("Applied {} bridges ({} circularised)", stats.accepted, stats.circularised);
+            let stats = utils::timed_step("Bridge contigs", || {
+                scaffold::scaffold_graph(
+                    &mut graph,
+                    reads,
+                    work_dir,
+                    &args.scaffold,
+                    args.threads,
+                    args.read_type,
+                )
+            })?;
+            println!(
+                "Bridges applied: {}, circularised: {}",
+                stats.accepted, stats.circularised
+            );
             if args.polish_rounds > 0 {
                 let params = consensus::ConsensusParams {
                     rounds: args.polish_rounds,
@@ -55,9 +82,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                     threads: args.threads,
                     read_type: args.read_type,
                 };
-                consensus::polish_graph(&mut graph, reads, work_dir, &params)?;
+                let stats = utils::timed_step("Polish contigs", || {
+                    consensus::polish_graph(&mut graph, reads, work_dir, &params)
+                })?;
+                println!(
+                    "Consensus: {} rounds, {} -> {} bases; {} windows changed",
+                    stats.rounds_run, stats.bases_before, stats.bases_after, stats.windows_changed
+                );
             }
-            graph.write_fasta(out)?;
+            utils::timed_step("Write scaffolded FASTA", || graph.write_fasta(out))?;
         }
         Commands::Assemble(args) => assemble(&args)?,
     }
@@ -79,22 +112,28 @@ fn edge_count(graph: &OverlapGraph) -> usize {
 /// Iterative graph cleanup: transitive reduction, multi-edges, short edges, bubbles,
 /// isolated nodes and tips.
 fn cleanup_graph(graph: &mut OverlapGraph, args: &AssembleArgs) {
-    println!("\n=== STARTING GRAPH CLEANUP ===");
     utils::check_synchronization(graph);
     for iteration in 1..=args.cleanup_iterations {
-        println!("\n=== Cleanup Iteration {iteration} ===");
         let before = edge_count(graph);
         transitive_edge_reduction::reduce_transitive_edges(graph, args.fuzz);
-        println!("Removed {} edges with transitive edge reduction", before - edge_count(graph));
-        println!("Removed {} multi-edges", heuristic_simplification::remove_multi_edges(graph));
-        println!("Removed {} short edges", heuristic_simplification::remove_short_edges(graph, args.short_edge_ratio));
+        let transitive = before - edge_count(graph);
+        let multi_edges = heuristic_simplification::remove_multi_edges(graph);
+        let short_edges =
+            heuristic_simplification::remove_short_edges(graph, args.short_edge_ratio);
         let before = graph.nodes.len();
-        bubble_removal::remove_bubbles(graph, args.max_bubble_length as usize, args.min_support_ratio);
-        println!("Removed {} bubble nodes (including RCs)", before - graph.nodes.len());
+        bubble_removal::remove_bubbles(
+            graph,
+            args.max_bubble_length as usize,
+            args.min_support_ratio,
+        );
+        let bubbles = before - graph.nodes.len();
 
         // nodes without any edge
-        let targets: HashSet<&str> =
-            graph.nodes.values().flat_map(|n| n.edges.iter().map(|e| e.target_id.as_str())).collect();
+        let targets: HashSet<&str> = graph
+            .nodes
+            .values()
+            .flat_map(|n| n.edges.iter().map(|e| e.target_id.as_str()))
+            .collect();
         let isolated: HashSet<String> = graph
             .nodes
             .iter()
@@ -102,15 +141,22 @@ fn cleanup_graph(graph: &mut OverlapGraph, args: &AssembleArgs) {
             .map(|(id, _)| id.clone())
             .collect();
         utils::delete_nodes_and_edges(graph, &isolated);
-        println!("Removed {} isolated nodes", isolated.len());
 
         let before = graph.nodes.len();
         tip_trimming::trim_tips(graph, args.max_tip_len as usize);
-        println!("Removed {} nodes by tip trimming", before - graph.nodes.len());
+        println!(
+            "Iteration {iteration}: {transitive} transitive, {multi_edges} multi-, {short_edges} short edges; \
+             {bubbles} bubble, {} isolated, {} tip nodes removed",
+            isolated.len(),
+            before - graph.nodes.len()
+        );
     }
     utils::check_synchronization(graph);
-    println!("\n=== GRAPH CLEANUP COMPLETE ===");
-    println!("Final graph has {} nodes and {} edges", graph.nodes.len(), edge_count(graph));
+    println!(
+        "Cleaned graph: {} nodes, {} directed edges",
+        graph.nodes.len(),
+        edge_count(graph)
+    );
 }
 
 fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
@@ -120,64 +166,112 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
     check_exists(&args.reads.reads_fq)?;
     let (threads, read_type) = (args.reads.threads, args.reads.read_type);
 
-    println!("=== READ FILTERING AND ALIGNMENT ===");
-    let reads = align_reads::align_reads(&args.reads, out_dir)?;
-    println!("Filtered read count: {}", reads.filtered_read_count);
-    println!("Reads used in primary assembly: {}", reads.primary_read_count);
+    let reads = utils::timed_step("Read filtering and all-vs-all alignment", || {
+        align_reads::align_reads(&args.reads, out_dir)
+    })?;
 
     // overlaps: provided, or filtered from the alignments
-    let overlaps_path: PathBuf = match &args.overlaps {
-        Some(path) => PathBuf::from(path),
+    let overlaps_path = match &args.overlaps {
+        Some(path) => {
+            println!("Using precomputed overlaps from {path}");
+            PathBuf::from(path)
+        }
         None => {
             let path = out_dir.join(format!("{}.overlaps.bin", args.output_prefix));
-            let out = alignment_filtering::run_alignment_filtering(&out_dir.join(&args.reads.paf), &args.overlap)?;
-            out.serialize_overlaps(path.to_str().ok_or("invalid output path")?)?;
-            println!("Wrote overlaps to {}", path.display());
+            utils::timed_step("Filter read overlaps", || {
+                let out = alignment_filtering::run_alignment_filtering(
+                    &out_dir.join(&args.reads.paf),
+                    &args.overlap,
+                )?;
+                out.serialize_overlaps(path.to_str().ok_or("invalid output path")?)?;
+                println!(
+                    "Serialized {} overlaps to {}",
+                    out.overlaps.len(),
+                    path.display()
+                );
+                Ok::<_, Box<dyn Error>>(())
+            })?;
             path
         }
     };
-    let mut overlaps: HashMap<(usize, usize), Overlap> = bincode::deserialize_from(BufReader::new(File::open(&overlaps_path)?))?;
-    let mut graph = create_overlap_graph::run_create_overlap_graph(&overlaps)?;
-    cleanup_graph(&mut graph, args);
+    let (mut overlaps, mut graph): (HashMap<(usize, usize), Overlap>, OverlapGraph) =
+        utils::timed_step("Create overlap graph", || {
+            let overlaps: HashMap<(usize, usize), Overlap> =
+                bincode::deserialize_from(BufReader::new(File::open(&overlaps_path)?))?;
+            let graph = create_overlap_graph::run_create_overlap_graph(&overlaps)?;
+            Ok::<_, Box<dyn Error>>((overlaps, graph))
+        })?;
+    utils::timed_step("Clean overlap graph", || {
+        cleanup_graph(&mut graph, args);
+        Ok::<_, Box<dyn Error>>(())
+    })?;
     if args.write_dot {
-        graph.write_dot(out_dir.join("graph.dot"))?;
+        utils::timed_step("Write overlap graph visualization", || {
+            graph.write_dot(out_dir.join("graph.dot"))
+        })?;
     }
 
-    println!("\n=== COMPRESSING UNITIGS ===");
     let out_path = out_dir.join(format!("{}.fa", args.output_prefix));
     let mut assembly_reads = reads.primary_reads.clone();
-    let mut compressed = compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads);
-    println!("Primary assembly produced {} unitigs", compressed.unitigs.len());
+    let mut compressed = utils::timed_step("Compress graph into unitigs", || {
+        Ok::<_, Box<dyn Error>>(compress_graph::compress_unitigs(
+            &graph,
+            &overlaps,
+            &assembly_reads,
+        ))
+    })?;
+    println!("Primary unitigs: {}", compressed.unitigs.len());
 
     let mut rescued_nodes = HashSet::new();
     if args.rescue_enabled() {
-        println!("\n=== PLASMID RESCUE ===");
-        compressed.write_fasta(&out_path)?;
-        let rescue = plasmid_rescue::run_rescue_stage(
-            &reads.filtered_reads, &out_path, out_dir, &args.reads, &args.overlap, &mut graph, &mut overlaps,
-        )?;
-        if let Some(rescue) = rescue {
-            let combined = out_dir.join(format!("{}.combined.fq", args.output_prefix));
-            let mut file = File::create(&combined)?;
-            std::io::copy(&mut File::open(&reads.primary_reads)?, &mut file)?;
-            std::io::copy(&mut File::open(&rescue.reads)?, &mut file)?;
-            assembly_reads = combined;
-            rescued_nodes = rescue.node_ids;
-            compressed = compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads);
-        }
+        utils::timed_step("Rescue poorly represented reads", || {
+            compressed.write_fasta(&out_path)?;
+            let rescue = plasmid_rescue::run_rescue_stage(
+                &reads.filtered_reads,
+                &out_path,
+                out_dir,
+                &args.reads,
+                &args.overlap,
+                &mut graph,
+                &mut overlaps,
+            )?;
+            if let Some(rescue) = rescue {
+                let combined = out_dir.join(format!("{}.combined.fq", args.output_prefix));
+                let mut file = File::create(&combined)?;
+                std::io::copy(&mut File::open(&reads.primary_reads)?, &mut file)?;
+                std::io::copy(&mut File::open(&rescue.reads)?, &mut file)?;
+                assembly_reads = combined;
+                rescued_nodes = rescue.node_ids;
+                compressed = compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads);
+                println!("Unitigs after rescue: {}", compressed.unitigs.len());
+            }
+            Ok::<_, Box<dyn Error>>(())
+        })?;
     }
 
     compressed.write_fasta(&out_path)?;
-    let removed = segment_dedup::remove_contained_segments(&mut compressed, &out_path, out_dir, threads)?;
-    println!("Removed {removed} contained assembly segments");
+    let removed = utils::timed_step("Remove contained unitigs", || {
+        segment_dedup::remove_contained_segments(&mut compressed, &out_path, out_dir, threads)
+    })?;
+    println!("Contained unitigs removed: {removed}");
 
     if args.scaffold.rounds > 0 {
-        println!("\n=== CONTIG BRIDGING ===");
-        let stats = scaffold::scaffold_graph(&mut compressed, &assembly_reads, out_dir, &args.scaffold, threads, read_type)?;
-        println!("Bridging: {} bridges applied, {} circularised", stats.accepted, stats.circularised);
+        let stats = utils::timed_step("Bridge unitigs", || {
+            scaffold::scaffold_graph(
+                &mut compressed,
+                &assembly_reads,
+                out_dir,
+                &args.scaffold,
+                threads,
+                read_type,
+            )
+        })?;
+        println!(
+            "Bridges applied: {}, circularised: {}",
+            stats.accepted, stats.circularised
+        );
     }
     if args.consensus_rounds > 0 {
-        println!("\n=== CONSENSUS POLISHING ===");
         let params = consensus::ConsensusParams {
             rounds: args.consensus_rounds,
             window_len: args.consensus_window_len,
@@ -186,27 +280,47 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
             threads,
             read_type,
         };
-        let stats = consensus::polish_graph(&mut compressed, &assembly_reads, out_dir, &params)?;
-        println!("Consensus: {} rounds, {} -> {} bases", stats.rounds_run, stats.bases_before, stats.bases_after);
+        let stats = utils::timed_step("Polish unitig consensus", || {
+            consensus::polish_graph(&mut compressed, &assembly_reads, out_dir, &params)
+        })?;
+        println!(
+            "Consensus: {} rounds, {} -> {} bases; {} windows changed, {} lacked support",
+            stats.rounds_run,
+            stats.bases_before,
+            stats.bases_after,
+            stats.windows_changed,
+            stats.windows_unsupported
+        );
     }
     if assembly_reads != reads.primary_reads {
         std::fs::remove_file(&assembly_reads)?;
     }
 
-    compressed.write_fasta(&out_path)?;
     let gfa_path = out_dir.join(format!("{}.gfa", args.output_prefix));
-    compressed.write_gfa(gfa_path.to_str().ok_or("invalid output path")?)?;
-    println!("Assembly produced {} unitigs (written to {} and {})", compressed.unitigs.len(), out_path.display(), gfa_path.display());
+    utils::timed_step("Write assembly files", || {
+        compressed.write_fasta(&out_path)?;
+        compressed.write_gfa(gfa_path.to_str().ok_or("invalid output path")?)?;
+        Ok::<_, Box<dyn Error>>(())
+    })?;
+    println!(
+        "Assembly: {} unitigs; FASTA {}; GFA {}",
+        compressed.unitigs.len(),
+        out_path.display(),
+        gfa_path.display()
+    );
     if !rescued_nodes.is_empty() {
         let rescued: Vec<_> = compressed
             .unitigs
             .iter()
             .filter(|u| u.members.iter().any(|m| rescued_nodes.contains(&m.node_id)))
             .collect();
-        let bases: usize = rescued.iter().map(|u| u.fasta_seq.as_ref().map_or(0, String::len)).sum();
+        let bases: usize = rescued
+            .iter()
+            .map(|u| u.fasta_seq.as_ref().map_or(0, String::len))
+            .sum();
         println!("Rescued unitigs: {} ({bases} bases)", rescued.len());
     }
-    println!("\n=== ASSEMBLY COMPLETE ===");
+    println!("Assembly complete.");
     Ok(())
 }
 

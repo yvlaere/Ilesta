@@ -506,10 +506,8 @@ pub fn compress_unitigs(
         .flat_map(|u| u.members.iter())
         .filter_map(|m| parse_node_id(&m.node_id).ok().map(|(name, ..)| name))
         .collect();
-    println!("Loading FASTQ sequences from {}...", fastq_path.display());
     let fastq_seqs = load_fastq_sequences(fastq_path, &needed).unwrap();
 
-    println!("Generating unitig sequences and writing to FASTA...");
     for unitig in unitigs.iter_mut() {
         unitig.fasta_seq = Some(unitig_sequence(unitig, &fastq_seqs).unwrap());
     }

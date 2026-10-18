@@ -439,22 +439,6 @@ pub fn run_alignment_filtering(
         }
     }
 
-    println!("=== ALIGNMENT FILTERING ===");
-    println!("=== PHASE 1: CRUDE FILTERING ===");
-    println!("Total self-alignments skipped: {}", self_alignments_skipped);
-    println!(
-        "Total alignments skipped due to length filter: {}",
-        alignment_length_skipped
-    );
-    println!(
-        "Total alignments skipped due to percent identity filter: {}",
-        percent_identity_skipped
-    );
-    println!("Total reads kept: {}", reads.len());
-    println!("Total alignments kept: {}", alignments.len());
-    println!("=== PHASE 1 FINISHED ===");
-    println!("=== PHASE 2: COVERAGE CALCULATION ===");
-
     // all alignments have been read
     // store subregions with coverage >= 3 per read
     for read in &mut reads {
@@ -479,9 +463,6 @@ pub fn run_alignment_filtering(
         read.coverage_start = best.0 as u32;
         read.coverage_end = best.1 as u32;
     }
-
-    println!("=== PHASE 2 FINISHED ===");
-    println!("=== PHASE 3: ALIGNMENT CLASSIFICATION ===");
 
     // classify alignments and update contained reads set
     for ((query_id, target_id), alignment) in &alignments {
@@ -516,23 +497,10 @@ pub fn run_alignment_filtering(
         };
     }
 
-    println!("Total overlaps after classification: {}", overlaps.len());
-
     // filter contained reads from overlaps
     overlaps.retain(|(q_id, t_id), _| {
         !contained_reads.contains(q_id) && !contained_reads.contains(t_id)
     });
-
-    println!(
-        "Total overlaps after removing contained reads: {}",
-        overlaps.len()
-    );
-
-    // get unique reads from overlaps
-    let unique_reads: HashSet<usize> = overlaps
-        .keys()
-        .flat_map(|(q_id, t_id)| vec![*q_id, *t_id])
-        .collect();
 
     // filter low coverage reads
     let threshold = *min_overlap_count;
@@ -545,16 +513,25 @@ pub fn run_alignment_filtering(
     overlaps.retain(|(q_id, t_id), _| {
         !low_coverage_reads.contains(q_id) && !low_coverage_reads.contains(t_id)
     });
+    let graph_reads: HashSet<usize> = overlaps
+        .keys()
+        .flat_map(|(q_id, t_id)| [*q_id, *t_id])
+        .collect();
     println!(
-        "Total number of reads for graph creation: {}",
-        unique_reads.len()
+        "Alignment filtering: {} reads, {} alignments retained; {} self-alignments, {} short alignments, {} low-identity alignments skipped",
+        reads.len(),
+        alignments.len(),
+        self_alignments_skipped,
+        alignment_length_skipped,
+        percent_identity_skipped
     );
     println!(
-        "Total number of overlaps for graph creation: {}",
-        overlaps.len()
+        "Graph input: {} reads, {} overlaps ({} contained, {} low-coverage reads removed)",
+        graph_reads.len(),
+        overlaps.len(),
+        contained_reads.len(),
+        low_coverage_reads.len()
     );
-    println!("=== PHASE 3 FINISHED ===");
-    println!("=== ALIGNMENT FILTERING FINISHED ===");
 
     Ok(AlignmentFilteringOutput { overlaps })
 }

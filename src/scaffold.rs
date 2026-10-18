@@ -519,7 +519,6 @@ struct Plan {
 fn plan_bridges(
     seqs: &[String],
     circular: &[bool],
-    ids: &[usize],
     reads: &Path,
     work_dir: &Path,
     opts: &ScaffoldOpts,
@@ -582,8 +581,6 @@ fn plan_bridges(
                     (cut, cut, if rc { rev_comp(s) } else { s.to_string() })
                 }
             };
-            println!("  bridge unitig_{}{} -> unitig_{}{} ({} reads, gap {})",
-                ids[b.key.a.0], sign(b.key.a.1), ids[b.key.b.0], sign(b.key.b.1), b.supports.len(), b.gap);
             Some(AcceptedBridge { key: b.key, tail_cut, head_cut, slice })
         })
         .collect();
@@ -736,18 +733,20 @@ pub fn scaffold_graph(
         if graph.unitigs.is_empty() {
             break;
         }
-        println!("Bridging round {round}/{}...", opts.rounds);
         let seqs: Vec<String> = graph.unitigs.iter().map(|u| u.fasta_seq.as_deref().unwrap_or("").to_ascii_uppercase()).collect();
         let circular: Vec<bool> = graph.unitigs.iter().map(|u| u.topology == 'c').collect();
-        let ids: Vec<usize> = graph.unitigs.iter().map(|u| u.id).collect();
-        let plan = plan_bridges(&seqs, &circular, &ids, reads, work_dir, opts, (threads, read_type))?;
+        let plan = crate::utils::timed_step(
+            &format!("Contig bridging round {round}/{}", opts.rounds),
+            || plan_bridges(&seqs, &circular, reads, work_dir, opts, (threads, read_type)),
+        )?;
+        let scaffold_count = plan.scaffolds.len();
         total.accepted += plan.stats.accepted;
         total.circularised += plan.stats.circularised;
         if plan.scaffolds.is_empty() {
             break;
         }
         apply_plan(graph, &plan);
-        println!("  {} scaffold(s) created; {} contigs remain", plan.scaffolds.len(), graph.unitigs.len());
+        println!("Bridging round {round}: {scaffold_count} scaffolds, {} unitigs remain", graph.unitigs.len());
     }
     Ok(total)
 }
@@ -901,7 +900,7 @@ mod tests {
         }
         // two contigs with a 300 bp gap between them; the second one is reverse complemented
         let seqs = vec![genome[..14_000].to_string(), rev_comp(&genome[14_300..])];
-        let plan = plan_bridges(&seqs, &[false; 2], &[0, 1], &reads, &dir, &opts(), (1, ReadType::Ont)).unwrap();
+        let plan = plan_bridges(&seqs, &[false; 2], &reads, &dir, &opts(), (1, ReadType::Ont)).unwrap();
         assert_eq!(plan.scaffolds.len(), 1);
         let s = &plan.scaffolds[0];
         assert!(!s.circular);

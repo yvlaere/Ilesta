@@ -4,7 +4,66 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+/// Run a pipeline step with timestamped start, completion, and elapsed-time output.
+pub fn timed_step<T, E: std::fmt::Display>(
+    label: &str,
+    operation: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    let started = Instant::now();
+    println!("\n[{}] {label}", utc_timestamp());
+    match operation() {
+        Ok(value) => {
+            println!(
+                "[{}] Completed {label} ({:.2}s)",
+                utc_timestamp(),
+                started.elapsed().as_secs_f64()
+            );
+            Ok(value)
+        }
+        Err(error) => {
+            eprintln!(
+                "[{}] Failed {label} after {:.2}s: {error}",
+                utc_timestamp(),
+                started.elapsed().as_secs_f64()
+            );
+            Err(error)
+        }
+    }
+}
+
+fn utc_timestamp() -> String {
+    let seconds = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs() as i64,
+        Err(error) => -(error.duration().as_secs() as i64),
+    };
+    format_utc_timestamp(seconds)
+}
+
+fn format_utc_timestamp(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let day_seconds = seconds.rem_euclid(86_400);
+
+    // Convert days since the Unix epoch to a Gregorian calendar date.
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 }.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    let hour = day_seconds / 3_600;
+    let minute = day_seconds % 3_600 / 60;
+    let second = day_seconds % 60;
+
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
 
 /// Opens a FASTQ file for buffered reading, automatically decompressing if gzipped.
 pub fn open_fastq_reader(path: &Path) -> std::io::Result<Box<dyn BufRead>> {
@@ -247,7 +306,7 @@ pub fn rev_comp(seq: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::read_fastq_record;
+    use super::{format_utc_timestamp, read_fastq_record};
     use std::io::Cursor;
 
     #[test]
@@ -263,9 +322,15 @@ mod tests {
         assert_eq!(record.3, "IIII@@@@");
         assert!(read_fastq_record(&mut reader).unwrap().is_none());
     }
+
+    #[test]
+    fn formats_utc_timestamps() {
+        assert_eq!(format_utc_timestamp(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_utc_timestamp(1_600_000_000), "2020-09-13T12:26:40Z");
+    }
 }
 
-/// Run `minimap2 <args> -t <threads> <target> <query> -o <out>` and wait for it.
+/// Run minimap2 without forwarding its progress output to the assembler's console.
 pub fn run_minimap2(
     args: &[&str],
     threads: usize,
@@ -281,6 +346,8 @@ pub fn run_minimap2(
         .arg(query)
         .arg("-o")
         .arg(out)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status()?;
     if status.success() {
         Ok(())
