@@ -201,13 +201,9 @@ pub struct AssembleArgs {
     #[arg(long, default_value_t = 0.8f64, help_heading = "Assembly")]
     pub short_edge_ratio: f64,
 
-    /// Assemble poorly represented reads once as a plasmid rescue stage (on by default; kept for compatibility)
-    #[arg(long, hide = true, action = clap::ArgAction::SetTrue)]
-    pub rescue_plasmids: bool,
-
-    /// Disable the plasmid rescue stage
+    /// Disable rescue of poorly represented reads (enabled by default)
     #[arg(long, action = clap::ArgAction::SetTrue, help_heading = "Assembly")]
-    pub no_rescue_plasmids: bool,
+    pub no_rescue: bool,
 
     /// Also write the overlap graph as graph.dot
     #[arg(long, action = clap::ArgAction::SetTrue, help_heading = "Output")]
@@ -239,7 +235,7 @@ pub struct AssembleArgs {
 
 impl AssembleArgs {
     pub fn rescue_enabled(&self) -> bool {
-        !self.no_rescue_plasmids
+        !self.no_rescue
     }
 }
 
@@ -349,9 +345,9 @@ mod tests {
     }
 
     #[test]
-    fn plasmid_rescue_flags() {
+    fn rescue_is_enabled_by_default_and_can_be_disabled() {
         assert!(assemble(&["assemble", "-r", "r.fq"]).rescue_enabled());
-        assert!(assemble(&["assemble", "-r", "r.fq", "--rescue-plasmids"]).rescue_enabled());
-        assert!(!assemble(&["assemble", "-r", "r.fq", "--no-rescue-plasmids"]).rescue_enabled());
+        assert!(!assemble(&["assemble", "-r", "r.fq", "--no-rescue"]).rescue_enabled());
+        assert!(parse(&["assemble", "-r", "r.fq", "--rescue"]).is_err());
     }
 }
