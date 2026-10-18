@@ -86,6 +86,33 @@ pub fn open_fastq_reader(path: &Path) -> std::io::Result<Box<dyn BufRead>> {
 pub fn read_fastq_record<R: BufRead + ?Sized>(
     reader: &mut R,
 ) -> std::io::Result<Option<(String, String, String, String)>> {
+    let mut header = String::new();
+    let mut sequence = String::new();
+    let mut plus = String::new();
+    let mut quality = String::new();
+    let mut line = String::new();
+    if !read_fastq_record_into(
+        reader,
+        &mut header,
+        &mut sequence,
+        &mut plus,
+        &mut quality,
+        &mut line,
+    )? {
+        return Ok(None);
+    }
+
+    Ok(Some((header, sequence, plus, quality)))
+}
+
+pub(crate) fn read_fastq_record_into<R: BufRead + ?Sized>(
+    reader: &mut R,
+    header: &mut String,
+    sequence: &mut String,
+    plus: &mut String,
+    quality: &mut String,
+    line: &mut String,
+) -> std::io::Result<bool> {
     fn read_line<R: BufRead + ?Sized>(reader: &mut R, line: &mut String) -> std::io::Result<bool> {
         line.clear();
         if reader.read_line(line)? == 0 {
@@ -97,9 +124,9 @@ pub fn read_fastq_record<R: BufRead + ?Sized>(
         Ok(true)
     }
 
-    let mut header = String::new();
-    if !read_line(reader, &mut header)? {
-        return Ok(None);
+    header.clear();
+    if !read_line(reader, header)? {
+        return Ok(false);
     }
     if !header.starts_with('@') {
         return Err(std::io::Error::new(
@@ -108,31 +135,32 @@ pub fn read_fastq_record<R: BufRead + ?Sized>(
         ));
     }
 
-    let mut sequence = String::new();
-    let mut plus = String::new();
+    sequence.clear();
     loop {
-        if !read_line(reader, &mut plus)? {
+        if !read_line(reader, line)? {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "FASTQ record is missing its plus line",
             ));
         }
-        if plus.starts_with('+') {
+        if line.starts_with('+') {
+            plus.clear();
+            plus.push_str(line);
             break;
         }
-        sequence.push_str(&plus);
+        sequence.push_str(line);
     }
 
-    let mut quality = String::with_capacity(sequence.len());
-    let mut line = String::new();
+    quality.clear();
+    quality.reserve(sequence.len());
     while quality.len() < sequence.len() {
-        if !read_line(reader, &mut line)? {
+        if !read_line(reader, line)? {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "FASTQ record has fewer quality characters than sequence bases",
             ));
         }
-        quality.push_str(&line);
+        quality.push_str(line);
     }
     if quality.len() != sequence.len() {
         return Err(std::io::Error::new(
@@ -141,7 +169,7 @@ pub fn read_fastq_record<R: BufRead + ?Sized>(
         ));
     }
 
-    Ok(Some((header, sequence, plus, quality)))
+    Ok(true)
 }
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -306,7 +334,7 @@ pub fn rev_comp(seq: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_utc_timestamp, read_fastq_record};
+    use super::{format_utc_timestamp, read_fastq_record, read_fastq_record_into};
     use std::io::Cursor;
 
     #[test]
@@ -321,6 +349,60 @@ mod tests {
         assert_eq!(record.2, "+read1");
         assert_eq!(record.3, "IIII@@@@");
         assert!(read_fastq_record(&mut reader).unwrap().is_none());
+    }
+
+    #[test]
+    fn reads_fastq_records_into_reused_buffers() {
+        let input = b"@read1\nACGT\n+\nIIII\n@read2\nTGCA\n+\n!!!!\n";
+        let mut reader = Cursor::new(input);
+        let mut header = String::new();
+        let mut sequence = String::new();
+        let mut plus = String::new();
+        let mut quality = String::new();
+        let mut line = String::new();
+
+        assert!(
+            read_fastq_record_into(
+                &mut reader,
+                &mut header,
+                &mut sequence,
+                &mut plus,
+                &mut quality,
+                &mut line,
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            (&*header, &*sequence, &*plus, &*quality),
+            ("@read1", "ACGT", "+", "IIII")
+        );
+
+        assert!(
+            read_fastq_record_into(
+                &mut reader,
+                &mut header,
+                &mut sequence,
+                &mut plus,
+                &mut quality,
+                &mut line,
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            (&*header, &*sequence, &*plus, &*quality),
+            ("@read2", "TGCA", "+", "!!!!")
+        );
+        assert!(
+            !read_fastq_record_into(
+                &mut reader,
+                &mut header,
+                &mut sequence,
+                &mut plus,
+                &mut quality,
+                &mut line,
+            )
+            .unwrap()
+        );
     }
 
     #[test]

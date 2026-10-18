@@ -28,12 +28,34 @@ fn filter_fastq(
     let mut reader = crate::utils::open_fastq_reader(input)?;
     let mut writer = BufWriter::new(File::create(output)?);
     let mut kept = Vec::new();
-    while let Some((header, seq, plus, qual)) = crate::utils::read_fastq_record(reader.as_mut())? {
+    let mut header = String::new();
+    let mut seq = String::new();
+    let mut plus = String::new();
+    let mut qual = String::new();
+    let mut line = String::new();
+    while crate::utils::read_fastq_record_into(
+        reader.as_mut(),
+        &mut header,
+        &mut seq,
+        &mut plus,
+        &mut qual,
+        &mut line,
+    )? {
         let len = seq.len() as u32;
+        if len < min_len {
+            continue;
+        }
         let sum_q: u64 = qual.bytes().map(|b| b.saturating_sub(33) as u64).sum();
-        if len >= min_len && sum_q as f32 / len as f32 >= min_q {
+        if sum_q as f32 / len as f32 >= min_q {
             kept.push((header.trim_start_matches('@').to_string(), len));
-            write!(writer, "{header}\n{seq}\n{plus}\n{qual}\n")?;
+            writer.write_all(header.as_bytes())?;
+            writer.write_all(b"\n")?;
+            writer.write_all(seq.as_bytes())?;
+            writer.write_all(b"\n")?;
+            writer.write_all(plus.as_bytes())?;
+            writer.write_all(b"\n")?;
+            writer.write_all(qual.as_bytes())?;
+            writer.write_all(b"\n")?;
         }
     }
     writer.flush()?;
