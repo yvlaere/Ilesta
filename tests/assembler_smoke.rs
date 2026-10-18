@@ -33,7 +33,6 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
 
     let result = Command::new(env!("CARGO_BIN_EXE_Ilesta"))
         .arg("assemble")
-        .arg("--rescue-plasmids")
         .arg("--reads-fq")
         .arg(&sample_path)
         .arg("--output-dir")
@@ -71,6 +70,10 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
             .lines()
             .any(|line| line.starts_with("[20") && line.contains("Z] ")),
         "pipeline step timestamps were not reported"
+    );
+    assert!(
+        stdout.contains("=== START:") && stdout.contains("=== FINISHED:"),
+        "pipeline stage headings and completion markers were not reported"
     );
     assert!(
         !stdout.contains("[M::"),

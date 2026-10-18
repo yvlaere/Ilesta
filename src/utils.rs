@@ -13,11 +13,11 @@ pub fn timed_step<T, E: std::fmt::Display>(
     operation: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
     let started = Instant::now();
-    println!("\n[{}] {label}", utc_timestamp());
+    println!("[{}] === START: {label} ===", utc_timestamp());
     match operation() {
         Ok(value) => {
             println!(
-                "[{}] Completed {label} ({:.2}s)",
+                "[{}] === FINISHED: {label} ({:.2}s) ===",
                 utc_timestamp(),
                 started.elapsed().as_secs_f64()
             );
@@ -25,7 +25,7 @@ pub fn timed_step<T, E: std::fmt::Display>(
         }
         Err(error) => {
             eprintln!(
-                "[{}] Failed {label} after {:.2}s: {error}",
+                "[{}] === FAILED: {label} after {:.2}s: {error} ===",
                 utc_timestamp(),
                 started.elapsed().as_secs_f64()
             );

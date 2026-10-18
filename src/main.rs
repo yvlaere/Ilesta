@@ -6,7 +6,7 @@ mod compress_graph;
 mod consensus;
 mod create_overlap_graph;
 mod heuristic_simplification;
-mod plasmid_rescue;
+mod rescue;
 mod scaffold;
 mod segment_dedup;
 mod tip_trimming;
@@ -226,7 +226,7 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
     if args.rescue_enabled() {
         utils::timed_step("Rescue poorly represented reads", || {
             compressed.write_fasta(&out_path)?;
-            let rescue = plasmid_rescue::run_rescue_stage(
+            let rescue = rescue::run_rescue_stage(
                 &reads.filtered_reads,
                 &out_path,
                 out_dir,

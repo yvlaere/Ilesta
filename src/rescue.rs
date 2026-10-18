@@ -1,4 +1,4 @@
-//! Plasmid rescue: reads that do not map to the primary assembly are assembled separately
+//! Rescue: reads that do not map to the primary assembly are assembled separately
 //! (they are rarely covered well enough to survive the main graph) and the resulting graph is
 //! merged into the main one.
 
