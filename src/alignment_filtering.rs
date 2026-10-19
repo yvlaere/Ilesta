@@ -570,7 +570,7 @@ pub fn run_alignment_filtering(
     Ok(AlignmentFilteringOutput { overlaps })
 }
 
-[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
 
