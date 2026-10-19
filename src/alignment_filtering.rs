@@ -109,6 +109,9 @@ impl AlignmentFilteringOutput {
     }
 }
 
+pub static CLIPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static CLIPPED_BASES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Classify alignment and update contained reads set
 fn classify_alignment(
     r: &Alignment,
@@ -126,10 +129,36 @@ fn classify_alignment(
     // coverage-trimmed read (the node sequence is `read[coverage_start..coverage_end]`)
     let (qcs, qce) = (reads[query_id].coverage_start as i64, reads[query_id].coverage_end as i64);
     let (tcs, tce) = (reads[target_id].coverage_start as i64, reads[target_id].coverage_end as i64);
-    let query_start = std::cmp::max(r.query_start, qcs) - qcs;
-    let query_end = std::cmp::min(r.query_end, qce) - qcs;
-    let target_start = std::cmp::max(r.target_start, tcs) - tcs;
-    let target_end = std::cmp::min(r.target_end, tce) - tcs;
+    // Clipping one read to its trimmed interval must advance the other read by the same number of
+    // bases (the alignment diagonal is fixed), otherwise the offset between the two reads, and
+    // with it the edge length, is off by the clipped length.
+    let plus = r.strand == '+';
+    let lead = [qcs - r.query_start, if plus { tcs - r.target_start } else { r.target_end - tce }, 0]
+        .into_iter()
+        .max()
+        .unwrap();
+    let trail = [r.query_end - qce, if plus { r.target_end - tce } else { tcs - r.target_start }, 0]
+        .into_iter()
+        .max()
+        .unwrap();
+    let (qs, qe) = (r.query_start + lead, r.query_end - trail);
+    let (mut ts, mut te) = (r.target_start, r.target_end);
+    if plus {
+        ts += lead;
+        te -= trail;
+    } else {
+        te -= lead;
+        ts += trail;
+    }
+    if qs >= qe || ts >= te {
+        return AlignmentType::Filtered;
+    }
+    if lead > 0 || trail > 0 {
+        CLIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        CLIPPED_BASES.fetch_add((lead + trail) as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+    let (query_start, query_end) = (qs - qcs, qe - qcs);
+    let (target_start, target_end) = (ts - tcs, te - tcs);
     let query_length = qce - qcs;
     let target_length = tce - tcs;
 
@@ -526,6 +555,11 @@ pub fn run_alignment_filtering(
         percent_identity_skipped
     );
     println!(
+        "Alignments clipped to coverage-trimmed reads: {} ({} bases)",
+        CLIPPED.load(std::sync::atomic::Ordering::Relaxed),
+        CLIPPED_BASES.load(std::sync::atomic::Ordering::Relaxed)
+    );
+    println!(
         "Graph input: {} reads, {} overlaps ({} contained, {} low-coverage reads removed)",
         graph_reads.len(),
         overlaps.len(),
@@ -534,4 +568,79 @@ pub fn run_alignment_filtering(
     );
 
     Ok(AlignmentFilteringOutput { overlaps })
+}
+
+[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(start: u32, end: u32) -> Read {
+        Read { per_base_coverage: Vec::new(), coverage_start: start, coverage_end: end }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn aln(qs: i64, qe: i64, strand: char, ts: i64, te: i64) -> Alignment {
+        Alignment {
+            query_name: "q".into(),
+            query_length: 5000,
+            query_start: qs,
+            query_end: qe,
+            strand,
+            target_name: "t".into(),
+            target_length: 5000,
+            target_start: ts,
+            target_end: te,
+            num_matching: 3900,
+            alignment_block_length: 4000,
+        }
+    }
+
+    fn classify(a: &Alignment, reads: &[Read]) -> Option<Overlap> {
+        let mut overlaps = HashMap::new();
+        classify_alignment(a, 0, 1, &mut overlaps, 0.2, &reads.to_vec(), 500);
+        overlaps.remove(&(0, 1))
+    }
+
+    impl Clone for Read {
+        fn clone(&self) -> Self {
+            Read { per_base_coverage: Vec::new(), coverage_start: self.coverage_start, coverage_end: self.coverage_end }
+        }
+    }
+
+    /// t starts 1000 bp before q. q is coverage-trimmed to start at 400, so the t -> q edge is
+    /// 1000 + 400 bp long (clipping q must also advance t, not leave its start at 1000).
+    #[test]
+    fn trimmed_query_start_shifts_target() {
+        let reads = [read(400, 5000), read(0, 5000)];
+        let ov = classify(&aln(0, 4000, '+', 1000, 5000), &reads).expect("overlap");
+        assert_eq!(ov.source_name, "t:0-5000+");
+        assert_eq!(ov.sink_name, "q:400-5000+");
+        assert_eq!(ov.edge_len, 1400);
+    }
+
+    /// Same on the other read: t trimmed at its start, q -> t edge is 1000 + 0 = 1000 + trim.
+    #[test]
+    fn trimmed_target_start_shifts_query() {
+        let reads = [read(0, 5000), read(300, 5000)];
+        let ov = classify(&aln(1000, 5000, '+', 0, 4000), &reads).expect("overlap");
+        assert_eq!(ov.source_name, "q:0-5000+");
+        assert_eq!(ov.edge_len, 1300);
+    }
+
+    /// Reverse strand: q[0..4000] aligns to the reverse complement of t[0..4000], so t_rc starts
+    /// 1000 bp before q. Trimming q's start by 400 advances the target from its end, giving 1400.
+    #[test]
+    fn trimmed_query_start_shifts_target_end_on_reverse_strand() {
+        let reads = [read(400, 5000), read(0, 5000)];
+        let ov = classify(&aln(0, 4000, '-', 0, 4000), &reads).expect("overlap");
+        assert_eq!(ov.source_name, "t:0-5000-");
+        assert_eq!(ov.edge_len, 1400);
+    }
+
+    #[test]
+    fn untrimmed_reads_are_unchanged() {
+        let reads = [read(0, 5000), read(0, 5000)];
+        let ov = classify(&aln(1000, 5000, '+', 0, 4000), &reads).expect("overlap");
+        assert_eq!(ov.edge_len, 1000);
+    }
 }
