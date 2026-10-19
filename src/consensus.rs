@@ -59,8 +59,12 @@ const MISMATCH: i32 = -4;
 const GAP: i32 = -8;
 /// Slack (in backbone positions) around the window span of a read segment.
 const SLACK: u32 = 24;
-/// Half-width of the DP band around the interpolated read position.
+/// Minimum half-width of the DP band around the interpolated read position. The band is widened
+/// by the length difference between the read segment and its backbone span, so that indels of
+/// up to a window length in the draft can be repaired.
 const BAND: usize = 24;
+/// Upper limit for the half-width of the DP band.
+const MAX_BAND: usize = 1500;
 /// Minimum identity of a whole read alignment to be used.
 const MIN_IDENTITY: f64 = 0.6;
 /// A path node is kept only if at least this fraction of the local median
@@ -676,7 +680,8 @@ impl Poa {
     /// Align `seq` globally to the part of the graph whose anchors lie in
     /// `[lo, hi]` (global in the read, free start/end in the graph subject to
     /// the anchor limits).  The DP is banded: a node with backbone anchor `a`
-    /// is only paired with read positions within `BAND` of the linear
+    /// is only paired with read positions within `band` (`BAND` plus the length
+    /// difference of read segment and backbone span) of the linear
     /// interpolation `(a - b0) * m / span`.  Returns (node or -1, read
     /// position or -1) pairs.
     fn align(
@@ -688,8 +693,9 @@ impl Poa {
         sc: &mut DpScratch,
     ) -> Option<Vec<(i32, i32)>> {
         const NEG: i32 = i32::MIN / 2;
-        const WW: usize = 2 * BAND + 2;
         let m = seq.len();
+        let band = (BAND + m.abs_diff(span as usize)).min(MAX_BAND);
+        let ww = 2 * band + 2;
         sc.rows.clear();
         sc.row_of.clear();
         sc.row_of.resize(self.base.len(), 0);
@@ -704,18 +710,18 @@ impl Poa {
         if nr == 0 {
             return None;
         }
-        // Row r holds the columns [js[r], js[r] + WW) of the DP; row 0 is the
+        // Row r holds the columns [js[r], js[r] + ww) of the DP; row 0 is the
         // virtual start (h = j * GAP).
         sc.h.clear();
-        sc.h.resize((nr + 1) * WW, NEG);
+        sc.h.resize((nr + 1) * ww, NEG);
         sc.tb.clear();
-        sc.tb.resize((nr + 1) * WW, 0);
+        sc.tb.resize((nr + 1) * ww, 0);
         sc.js.clear();
         sc.js.push(0);
         for r in 1..=nr {
             let a = self.anchor[sc.rows[r - 1] as usize] as i64 - b0 as i64;
             let c = (a * m as i64 / span.max(1) as i64).clamp(0, m as i64);
-            sc.js.push((c - BAND as i64).max(0) as u32);
+            sc.js.push((c - band as i64).max(0) as u32);
         }
         let js = std::mem::take(&mut sc.js);
         let get = |h: &[i32], p: usize, j: usize| -> i32 {
@@ -723,7 +729,7 @@ impl Poa {
                 return j as i32 * GAP;
             }
             let o = j.wrapping_sub(js[p] as usize);
-            if o < WW { h[p * WW + o] } else { NEG }
+            if o < ww { h[p * ww + o] } else { NEG }
         };
         let mut preds: Vec<u32> = Vec::with_capacity(8);
         for r in 1..=nr {
@@ -740,7 +746,7 @@ impl Poa {
             }
             let bv = self.base[v];
             let j0 = js[r] as usize;
-            for j in j0..=(j0 + WW - 1).min(m) {
+            for j in j0..=(j0 + ww - 1).min(m) {
                 let mut best = NEG;
                 let mut code = 0u32;
                 if j > 0 {
@@ -761,14 +767,14 @@ impl Poa {
                     }
                 }
                 if j > j0 {
-                    let ins = sc.h[r * WW + j - 1 - j0] + GAP;
+                    let ins = sc.h[r * ww + j - 1 - j0] + GAP;
                     if ins > best {
                         best = ins;
                         code = ((r as u32) << 2) | 2;
                     }
                 }
-                sc.h[r * WW + j - j0] = best;
-                sc.tb[r * WW + j - j0] = code;
+                sc.h[r * ww + j - j0] = best;
+                sc.tb[r * ww + j - j0] = code;
             }
         }
         // best end
@@ -803,7 +809,7 @@ impl Poa {
                 j -= 1;
                 continue;
             }
-            let code = sc.tb[r * WW + j - js[r] as usize];
+            let code = sc.tb[r * ww + j - js[r] as usize];
             let p = (code >> 2) as usize;
             match code & 3 {
                 0 => {
@@ -947,8 +953,24 @@ fn poa_window(poa: &mut Poa, sc: &mut DpScratch, draft: &[u8], layers: &[Layer])
     let order = poa.topo(&mut indeg)?;
     sc.indeg = indeg;
     let cons = poa.consensus(&order, MIN_SUPPORT);
-    // sanity guard: keep the draft if the consensus is implausible
-    if cons.len() * 2 < draft.len() || cons.len() > draft.len() * 3 / 2 + 20 {
+    // sanity guard: keep the draft if the consensus is implausible. The expected length is the
+    // median length of the read segments that span the whole window (they differ from the draft
+    // length when the draft has an indel); without such reads the draft length is used.
+    let mut full: Vec<usize> = layers
+        .iter()
+        .filter(|l| l.b <= SLACK && l.e + SLACK >= draft.len() as u32)
+        .map(|l| l.seq.len())
+        .collect();
+    let expected = if full.len() >= 3 {
+        full.sort_unstable();
+        full[full.len() / 2]
+    } else {
+        draft.len()
+    };
+    let tolerance = expected / 8 + 20;
+    if cons.len() * 2 < draft.len().min(expected)
+        || (cons.len() > draft.len() * 3 / 2 + 20 && cons.len().abs_diff(expected) > tolerance)
+    {
         return None;
     }
     Some(cons)
@@ -1013,6 +1035,30 @@ mod tests {
         let mut sc = DpScratch::default();
         let cons = poa_window(&mut poa, &mut sc, &draft, &layers).unwrap();
         assert_eq!(cons, truth, "consensus should equal the truth at 25x");
+    }
+
+    /// A draft that lacks (or has extra) hundreds of bases relative to the reads is repaired.
+    #[test]
+    fn poa_repairs_large_indels_in_draft() {
+        let mut rng = Lcg(11);
+        let truth: Vec<u8> = (0..800).map(|_| (rng.next() % 4) as u8).collect();
+        for (missing, extra) in [(450usize, 0usize), (0, 300), (200, 0)] {
+            let mut draft: Vec<u8> = truth.clone();
+            if missing > 0 {
+                draft.drain(300..300 + missing);
+            }
+            for _ in 0..extra {
+                draft.insert(300, (rng.next() % 4) as u8);
+            }
+            let layers: Vec<Layer> = (0..25)
+                .map(|_| Layer { b: 0, e: draft.len() as u32, seq: mutate(&mut rng, &truth, 0.06) })
+                .collect();
+            let mut poa = Poa::new();
+            let mut sc = DpScratch::default();
+            let cons = poa_window(&mut poa, &mut sc, &draft, &layers).expect("window re-called");
+            let diff = cons.iter().zip(&truth).filter(|(a, b)| a != b).count();
+            assert!(cons.len().abs_diff(truth.len()) <= 2 && diff <= 3, "missing {missing}, extra {extra}: len {} vs {}, {diff} differ", cons.len(), truth.len());
+        }
     }
 
     #[test]
