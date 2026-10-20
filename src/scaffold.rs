@@ -42,6 +42,13 @@ const MIN_CHAIN_GAIN: i64 = FLANK as i64;
 /// resolved repeat is a copy that reads span (IS elements, rRNA operons, prophages). Anything
 /// larger is a replicon (plasmid) that merely ends in a repeat and must never be discarded.
 const MAX_REPEAT_DROP: usize = 20_000;
+/// An alignment that starts further than this from the head of its contig cannot show that the
++/// contig overlaps the previous one: an overlap join discards the first `overlap` bases of the
++/// second contig, and the overlap is measured as the position in that contig where the previous
++/// contig ends. A read that runs off the end of one contig into the *middle* of another (a repeat
++/// shared with the contig end) would otherwise give an "overlap" of hundreds of kb, and that
++/// part of the second contig would be thrown away.
++const MAX_HEAD_OFFSET: u32 = 5_000;
 /// Maximum number of alignments per read considered for chaining.
 const MAX_HITS_PER_READ: usize = 48;
 
@@ -184,7 +191,9 @@ impl Hit {
             return true;
         }
         let j = a.leave_pos();
+        let head_offset = if !self.rev { self.ts } else { self.tlen - self.te };
         self.cigar.is_some()
+           && head_offset <= MAX_HEAD_OFFSET
             && (self.qs as i64) < j - FLANK as i64
             && (self.qe as i64) >= j + FLANK as i64
             && self.enter_pos() >= a.enter_pos()
@@ -816,6 +825,26 @@ mod tests {
         assert_eq!(chain.hits.len(), 2);
         // second contig only hit mid-contig: no chain
         assert!(chain_of_read("r2", vec![a, hit(1, false, 3100, 7000, 2000, 5900, 10_000)]).is_none());
+    }
+
+    /// A read that leaves the end of contig 0 inside a repeat and continues in the middle of
+    /// contig 1 (not at its head) is no overlap evidence.
+    #[test]
+    fn no_overlap_link_into_the_middle_of_a_contig() {
+        let with_cigar = |mut h: Hit, c: &str| {
+            h.cigar = Some(c.to_string());
+            h
+        };
+        let a = with_cigar(hit(0, false, 0, 30_000, 4_487_807, 4_517_807, 4_517_807), "30000M");
+        // read continues in contig 1 at 898 kb
+        let mid = with_cigar(hit(1, false, 20_000, 60_000, 898_000, 938_000, 946_908), "40000M");
+        assert!(!link_ok(&a, &mid));
+        // the same read entering contig 1 near its head (overlapping contigs) still links
+        let head = with_cigar(hit(1, false, 20_000, 60_000, 1_000, 41_000, 946_908), "40000M");
+        assert!(link_ok(&a, &head));
+        // and so does the reverse-complement orientation
+        let mid_rev = with_cigar(hit(1, true, 20_000, 60_000, 6_908, 46_908, 946_908), "40000M");
+        assert!(link_ok(&a, &mid_rev) == (946_908 - 46_908 <= MAX_HEAD_OFFSET));
     }
 
     fn cand(a: usize, b: usize, n: usize, gap: i64) -> (BridgeKey, Vec<Support>) {
