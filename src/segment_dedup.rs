@@ -4,8 +4,13 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 
-/// Minimum fraction of matching bases (matches / alignment block) of an alignment that counts as containment.
-const MIN_IDENTITY: f64 = 0.8;
+/// Minimum fraction of matching bases (matches / alignment block) of an alignment that counts as
+/// containment. This is measured on base-level alignments (`-c`) of unitigs that are still
+/// unpolished, so two copies of the same sequence typically agree on ~90-95% of the bases.
+const MIN_IDENTITY: f64 = 0.75;
+/// minimap2 options of the all-vs-all unitig alignment. `-c` is essential: without it minimap2
+/// reports the matches of the seed chain (a small fraction of the bases at ONT error rates)
+const MINIMAP2_ARGS: &[&str] = &["-x", "asm20", "-DP", "-c"];
 /// Removed unitigs of at least this length are reported (replicons, not rescue fragments).
 const REPORT_MIN_LEN: u64 = 20_000;
 
@@ -21,7 +26,7 @@ pub fn remove_contained_segments(
         return Ok(0);
     }
     let paf = work_dir.join("assembly_containment.paf");
-    crate::utils::run_minimap2(&["-x", "asm10", "-DP"], threads, fasta, fasta, &paf)?;
+    crate::utils::run_minimap2(MINIMAP2_ARGS, threads, fasta, fasta, &paf)?;
     let contained = contained_unitig_ids(BufReader::new(File::open(paf)?))?;
     let before = assembly.unitigs.len();
     assembly.unitigs.retain(|u| !contained.contains(&u.id));
@@ -172,3 +177,55 @@ mod tests {
         assert_eq!(contained, [20].into_iter().collect());
     }
 }
+
+fn minimap2_available() -> bool {
+        std::process::Command::new("minimap2")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
+    /// A 6 kb copy of a longer unitig with ~4% substitutions and indels (what two unpolished
+    /// unitigs of the same region look like) must be recognised as contained; an unrelated
+    /// unitig must not.
+    #[test]
+    fn removes_a_diverged_copy_but_not_an_unrelated_unitig() {
+        if !minimap2_available() {
+            eprintln!("minimap2 not found, skipping");
+            return;
+        }
+        let mut state = 12345u64;
+        let mut next = move || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (state >> 33) as usize
+        };
+        let random = |n: usize, next: &mut dyn FnMut() -> usize| -> Vec<u8> {
+            (0..n).map(|_| b"ACGT"[next() % 4]).collect()
+        };
+        let big = random(30_000, &mut next);
+        let mut copy = Vec::new();
+        for &b in &big[10_000..16_000] {
+            match next() % 100 {
+                0..=1 => {}                                   // deletion
+                2 => { copy.push(b); copy.push(b"ACGT"[next() % 4]); } // insertion
+                3 => copy.push(b"ACGT"[next() % 4]),          // substitution
+                _ => copy.push(b),
+            }
+        }
+        let other = random(8_000, &mut next);
+
+        let dir = std::env::temp_dir().join(format!("ilesta-dedup-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fasta = dir.join("contigs.fa");
+        let mut text = String::new();
+        for (i, seq) in [&big, &copy, &other].iter().enumerate() {
+            text += &format!(">unitig_{i} topology=l\n{}\n", String::from_utf8_lossy(seq));
+        }
+        std::fs::write(&fasta, text).unwrap();
+        let mut graph = crate::compress_graph::CompressedGraph::from_fasta(&fasta).unwrap();
+        let removed = super::remove_contained_segments(&mut graph, &fasta, &dir, 1).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let kept: Vec<usize> = graph.unitigs.iter().map(|u| u.id).collect();
+        assert_eq!((removed, kept), (1, vec![0, 2]));
+    }
