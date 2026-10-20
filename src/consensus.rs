@@ -872,7 +872,8 @@ impl Poa {
     }
 
     /// Heaviest path through the graph.
-    fn consensus(&self, order: &[u32], min_support: f64) -> Vec<u8> {
+    /// `span[a]` is the number of read segments spanning backbone position `a`.
+    fn consensus(&self, order: &[u32], min_support: f64, span: &[u32]) -> Vec<u8> {
         let n = self.base.len();
         let mut score = vec![0u64; n];
         let mut back = vec![NONE; n];
@@ -898,10 +899,10 @@ impl Poa {
         }
         // Trace back the heaviest path, remembering how many reads support
         // each node.
-        let mut nodes: Vec<(u8, u32)> = Vec::new();
+        let mut nodes: Vec<(u8, u32, u32)> = Vec::new();
         let mut v = best_node;
         while v != NONE {
-            nodes.push((self.base[v as usize], self.cov[v as usize]));
+            nodes.push((self.base[v as usize], self.cov[v as usize], self.anchor[v as usize]));
             v = back[v as usize];
         }
         nodes.reverse();
@@ -922,7 +923,13 @@ impl Poa {
                     .map(|x| x.1),
             );
             buf.sort_unstable();
-            let depth = buf[buf.len() / 2];
+            // The reference depth is the larger of the local median coverage of the path and
+            // the number of read segments spanning the node's backbone position. The median
+            // alone is 0 inside any run of 21+ unsupported nodes (the window holds 41 nodes),
+            // and `0 >= 0.5 * 0` kept every base of such a run: poly-A/T stretches and short
+            // repeats of the draft that no read supports survived the consensus.
+            let spanning = span.get(nodes[i].2 as usize).copied().unwrap_or(0);
+            let depth = buf[buf.len() / 2].max(spanning);
             if (nodes[i].1 as f64) >= min_support * depth as f64 {
                 out.push(nodes[i].0);
             }
@@ -952,7 +959,24 @@ fn poa_window(poa: &mut Poa, sc: &mut DpScratch, draft: &[u8], layers: &[Layer])
     }
     let order = poa.topo(&mut indeg)?;
     sc.indeg = indeg;
-    let cons = poa.consensus(&order, MIN_SUPPORT);
+    // number of read segments spanning each backbone position
+    let mut diff = vec![0i32; draft.len() + 1];
+    for layer in layers.iter().filter(|l| l.seq.len() >= 10) {
+        let (b, e) = (layer.b as usize, (layer.e as usize).min(draft.len()));
+        if b < e {
+            diff[b] += 1;
+            diff[e] -= 1;
+        }
+    }
+    let mut run = 0i32;
+    let span: Vec<u32> = diff
+        .iter()
+        .map(|d| {
+            run += d;
+            run.max(0) as u32
+        })
+        .collect();
+    let cons = poa.consensus(&order, MIN_SUPPORT, &span);
     // sanity guard: keep the draft if the consensus is implausible. The expected length is the
     // median length of the read segments that span the whole window (they differ from the draft
     // length when the draft has an indel); without such reads the draft length is used.
@@ -1058,6 +1082,54 @@ mod tests {
             let cons = poa_window(&mut poa, &mut sc, &draft, &layers).expect("window re-called");
             let diff = cons.iter().zip(&truth).filter(|(a, b)| a != b).count();
             assert!(cons.len().abs_diff(truth.len()) <= 2 && diff <= 3, "missing {missing}, extra {extra}: len {} vs {}, {diff} differ", cons.len(), truth.len());
+        }
+    }
+
+    fn edit_distance(a: &[u8], b: &[u8]) -> usize {
+        let mut prev: Vec<usize> = (0..=b.len()).collect();
+        for i in 1..=a.len() {
+            let mut cur = vec![i; b.len() + 1];
+            for j in 1..=b.len() {
+                cur[j] = (prev[j - 1] + (a[i - 1] != b[j - 1]) as usize)
+                    .min(prev[j] + 1)
+                    .min(cur[j - 1] + 1);
+            }
+            prev = cur;
+        }
+        prev[b.len()]
+    }
+
+    /// Runs of low-complexity bases (poly-A, short repeats) that sit in the draft but in none
+    /// of the reads must be removed, whatever their length. Before, any run of 21 or more
+    /// draft-only bases survived: the local-median coverage filter is 0 inside such a run, so
+    /// `cov >= 0.5 * 0` kept every node.
+    #[test]
+    fn poa_removes_unsupported_runs_from_draft() {
+        for (kind, motif) in [("poly-A", &[0u8][..]), ("poly-T", &[3u8][..]), ("ATTCC", &[0u8, 3, 3, 1, 1][..])] {
+            for depth in [8usize, 25] {
+                for junk in [10usize, 21, 22, 25, 30, 60, 100, 300, 450] {
+                    let mut rng = Lcg(5 + junk as u64);
+                    let truth: Vec<u8> = (0..500).map(|_| (rng.next() % 4) as u8).collect();
+                    let mut draft = truth.clone();
+                    for i in 0..junk {
+                        draft.insert(250 + i, motif[i % motif.len()]);
+                    }
+                    let layers: Vec<Layer> = (0..depth)
+                        .map(|_| Layer { b: 0, e: draft.len() as u32, seq: mutate(&mut rng, &truth, 0.06) })
+                        .collect();
+                    let mut poa = Poa::new();
+                    let mut sc = DpScratch::default();
+                    let cons = poa_window(&mut poa, &mut sc, &draft, &layers)
+                        .unwrap_or_else(|| panic!("{kind} x{junk}, depth {depth}: window rejected"));
+                    let d = edit_distance(&cons, &truth);
+                    assert!(
+                        d <= 4,
+                        "{kind} x{junk}, depth {depth}: consensus {} bp vs truth {} bp (edit distance {d})",
+                        cons.len(),
+                        truth.len()
+                    );
+                }
+            }
         }
     }
 
