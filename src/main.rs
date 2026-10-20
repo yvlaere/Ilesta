@@ -1,6 +1,7 @@
 mod align_reads;
 mod alignment_filtering;
 mod bubble_removal;
+mod circularise;
 mod cli;
 mod compress_graph;
 mod consensus;
@@ -275,6 +276,10 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
         );
         report_unitigs("after bridging", &compressed);
     }
+    let circularised = utils::timed_step("Circularise unitigs with overlapping ends", || {
+        circularise::circularise_self_overlaps(&mut compressed, out_dir, threads)
+    })?;
+    println!("Unitigs circularised by overlapping ends: {circularised}");
     if args.consensus_rounds > 0 {
         let params = consensus::ConsensusParams {
             rounds: args.consensus_rounds,
