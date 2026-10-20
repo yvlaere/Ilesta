@@ -43,12 +43,12 @@ const MIN_CHAIN_GAIN: i64 = FLANK as i64;
 /// larger is a replicon (plasmid) that merely ends in a repeat and must never be discarded.
 const MAX_REPEAT_DROP: usize = 20_000;
 /// An alignment that starts further than this from the head of its contig cannot show that the
-+/// contig overlaps the previous one: an overlap join discards the first `overlap` bases of the
-+/// second contig, and the overlap is measured as the position in that contig where the previous
-+/// contig ends. A read that runs off the end of one contig into the *middle* of another (a repeat
-+/// shared with the contig end) would otherwise give an "overlap" of hundreds of kb, and that
-+/// part of the second contig would be thrown away.
-+const MAX_HEAD_OFFSET: u32 = 5_000;
+/// contig overlaps the previous one: an overlap join discards the first `overlap` bases of the
+/// second contig, and the overlap is measured as the position in that contig where the previous
+/// contig ends. A read that runs off the end of one contig into the *middle* of another (a repeat
+/// shared with the contig end) would otherwise give an "overlap" of hundreds of kb, and that
+/// part of the second contig would be thrown away.
+const MAX_HEAD_OFFSET: u32 = 5_000;
 /// Maximum number of alignments per read considered for chaining.
 const MAX_HITS_PER_READ: usize = 48;
 
