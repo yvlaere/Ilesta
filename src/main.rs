@@ -299,6 +299,15 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
     if assembly_reads != reads.primary_reads {
         std::fs::remove_file(&assembly_reads)?;
     }
+    if args.consensus_rounds > 0 {
+        // Second pass on polished sequences: copies that were too diverged to be recognised in
+        // the raw unitigs (and those created by bridging) align cleanly now.
+        compressed.write_fasta(&out_path)?;
+        let removed = utils::timed_step("Remove contained unitigs (polished)", || {
+            segment_dedup::remove_contained_segments(&mut compressed, &out_path, out_dir, threads)
+        })?;
+        println!("Contained unitigs removed after consensus: {removed}");
+    }
 
     let gfa_path = out_dir.join(format!("{}.gfa", args.output_prefix));
     utils::timed_step("Write assembly files", || {
