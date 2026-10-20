@@ -223,7 +223,7 @@ fn minimap2_available() -> bool {
         }
         std::fs::write(&fasta, text).unwrap();
         let mut graph = crate::compress_graph::CompressedGraph::from_fasta(&fasta).unwrap();
-        let removed = super::remove_contained_segments(&mut graph, &fasta, &dir, 1).unwrap();
+        let removed = remove_contained_segments(&mut graph, &fasta, &dir, 1).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
 
         let kept: Vec<usize> = graph.unitigs.iter().map(|u| u.id).collect();
