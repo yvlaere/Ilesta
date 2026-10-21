@@ -6,6 +6,7 @@ mod cli;
 mod compress_graph;
 mod consensus;
 mod create_overlap_graph;
+mod fold_back;
 mod heuristic_simplification;
 mod rescue;
 mod scaffold;
