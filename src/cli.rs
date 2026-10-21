@@ -202,7 +202,7 @@ pub struct AssembleArgs {
     pub short_edge_ratio: f64,
 
     /// Minimum overlap length in the rescue stage (the unmapped reads are short and low coverage)
-    #[arg(long, default_value_t = 1000u32, help_heading = "Assembly")]
+    #[arg(long, default_value_t = 2000u32, help_heading = "Assembly")]
     pub rescue_min_overlap_length: u32,
 
     /// Disable rescue of poorly represented reads (enabled by default)
