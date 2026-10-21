@@ -62,27 +62,10 @@ impl Alignment {
         self.query_name == self.target_name
     }
 
-    /// A read aligned to its own reverse complement, with the two arms adjacent: the read folds
-    /// back on itself (a chimeric hairpin read, second half = reverse complement of the first).
-    /// Inverted repeats with a gap between the arms (IS elements, rRNA operons) do not qualify.
-    fn is_fold_back(&self) -> bool {
-        self.is_self_alignment()
-            && self.strand == '-'
-            && self.query_end - self.query_start >= MIN_FOLD_BACK_ARM
-            && self.target_end - self.target_start >= MIN_FOLD_BACK_ARM
-            && self.query_start.max(self.target_start) - self.query_end.min(self.target_end)
-                <= MAX_FOLD_BACK_GAP
-    }
-
     fn percent_identity(&self) -> f32 {
         (self.num_matching as f32 / self.alignment_block_length as f32) * 100.0
     }
 }
-
-/// Shortest self-inverted stretch that marks a read as a fold-back chimera.
-const MIN_FOLD_BACK_ARM: i64 = 2_000;
-/// Largest distance between the two arms of a fold-back read (hairpin loop, adapter remnants).
-const MAX_FOLD_BACK_GAP: i64 = 500;
 
 /// Enum for alignment classification
 enum AlignmentType {
@@ -369,8 +352,6 @@ pub fn run_alignment_filtering(
     let mut overlaps: HashMap<(usize, usize), Overlap> = HashMap::new();
 
     let mut self_alignments_skipped: usize = 0;
-    // names of reads that fold back on themselves (self-alignment on the opposite strand)
-    let mut fold_back_names: HashSet<String> = HashSet::new();
     let mut alignment_length_skipped: usize = 0;
     let mut percent_identity_skipped: usize = 0;
 
@@ -388,9 +369,6 @@ pub fn run_alignment_filtering(
             // skip self alignments
             if record.is_self_alignment() {
                 self_alignments_skipped += 1;
-                if record.is_fold_back() {
-                    fold_back_names.insert(record.query_name.clone());
-                }
                 continue;
             }
 
@@ -491,12 +469,6 @@ pub fn run_alignment_filtering(
     }
 
     // all alignments have been read
-    // drop every alignment of a fold-back read: such a read is a chimera of a sequence and its reverse complement
-    let fold_back_reads: HashSet<usize> =
-        fold_back_names.iter().filter_map(|n| read_name2read_id.get(n).copied()).collect();
-    if !fold_back_reads.is_empty() {
-        alignments.retain(|(q, t), _| !fold_back_reads.contains(q) && !fold_back_reads.contains(t));
-    }
     // store subregions with coverage >= 3 per read
     for read in &mut reads {
         let mut cur_len = 0;
@@ -582,7 +554,6 @@ pub fn run_alignment_filtering(
         alignment_length_skipped,
         percent_identity_skipped
     );
-    println!("Fold-back (self-inverted) reads removed: {}", fold_back_names.len());
     println!(
         "Alignments clipped to coverage-trimmed reads: {} ({} bases)",
         CLIPPED.load(std::sync::atomic::Ordering::Relaxed),

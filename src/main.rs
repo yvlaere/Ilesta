@@ -326,6 +326,18 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
         out_path.display(),
         gfa_path.display()
     );
+    if !rescued_nodes.is_empty() {
+        let rescued: Vec<_> = compressed
+            .unitigs
+            .iter()
+            .filter(|u| u.members.iter().any(|m| rescued_nodes.contains(&m.node_id)))
+            .collect();
+        let bases: usize = rescued
+            .iter()
+            .map(|u| u.fasta_seq.as_ref().map_or(0, String::len))
+            .sum();
+        println!("Rescued unitigs: {} ({bases} bases)", rescued.len());
+    }
     println!("Assembly complete.");
     Ok(())
 }
