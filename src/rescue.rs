@@ -81,9 +81,7 @@ pub fn run_rescue_stage(
         reads_fq: rescue_fq.to_string_lossy().into_owned(),
         threads: reads.threads.clamp(1, 4),
         paf: "rescue.paf".into(),
-        // the reads were filtered already
-        min_read_length: 0,
-        min_base_quality: 0.0,
+        min_read_length: reads.min_read_length.saturating_sub(1).clamp(1, 500),
         genome_size: Some(assembly_len.clamp(1, u32::MAX as u64) as u32),
         target_coverage,
         minimap2_f: Some("0.001".into()),

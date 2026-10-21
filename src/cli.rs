@@ -76,12 +76,12 @@ pub struct ReadOpts {
     #[arg(short = 'a', long, default_value = "alignments.paf", help_heading = "Read filtering and alignment")]
     pub paf: String,
 
-    /// Minimum read length (0 = no filtering)
-    #[arg(long, default_value_t = 0, help_heading = "Read filtering and alignment")]
+    /// Minimum read length
+    #[arg(long, default_value_t = 1000, help_heading = "Read filtering and alignment")]
     pub min_read_length: u32,
 
-    /// Minimum average quality (0 = no filtering)
-    #[arg(short = 'q', long, default_value_t = 0.0, help_heading = "Read filtering and alignment")]
+    /// Minimum average quality
+    #[arg(short = 'q', long, default_value_t = 10.0, help_heading = "Read filtering and alignment")]
     pub min_base_quality: f32,
 
     /// Optional input genome size (if not provided, will be estimated from data)
