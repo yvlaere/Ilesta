@@ -62,67 +62,9 @@ impl Alignment {
         self.query_name == self.target_name
     }
 
-    /// A read aligned to its own reverse complement, with the two arms adjacent: the read folds
-    /// back on itself (a chimeric hairpin read, second half = reverse complement of the first).
-    /// Inverted repeats with a gap between the arms (IS elements, rRNA operons) do not qualify.
-    fn is_fold_back(&self) -> bool {
-        self.is_self_alignment()
-            && self.strand == '-'
-            && self.query_end - self.query_start >= MIN_FOLD_BACK_ARM
-            && self.target_end - self.target_start >= MIN_FOLD_BACK_ARM
-            && self.query_start.max(self.target_start) - self.query_end.min(self.target_end)
-                <= MAX_FOLD_BACK_GAP
-    }
-
-    /// Position in the read where a fold-back read turns around: the middle of the two arms.
-    fn fold_center(&self) -> i64 {
-        (self.query_start + self.query_end + self.target_start + self.target_end) / 4
-    }
-
     fn percent_identity(&self) -> f32 {
         (self.num_matching as f32 / self.alignment_block_length as f32) * 100.0
     }
-}
-
-/// Shortest self-inverted stretch that marks a read as a fold-back chimera.
-const MIN_FOLD_BACK_ARM: i64 = 2_000;
-/// Largest distance between the two arms of a fold-back read (hairpin loop, adapter remnants).
-const MAX_FOLD_BACK_GAP: i64 = 500;
-
-/// The longest stretch of a read of length `len` between its turning points (0 and `len` are the
-/// outer boundaries); the first one if there is a tie.
-fn longest_unfolded_stretch(centers: &[i64], len: i64) -> (i64, i64) {
-    let mut cuts: Vec<i64> = centers.iter().map(|&c| c.clamp(0, len)).collect();
-    cuts.push(0);
-    cuts.push(len);
-    cuts.sort_unstable();
-    cuts.windows(2)
-        .map(|w| (w[0], w[1]))
-        .max_by_key(|&(a, b)| (b - a, std::cmp::Reverse(a)))
-        .unwrap()
-}
-
-/// First pass over the PAF: for every fold-back read the stretch to keep, `(start, end)`.
-fn fold_back_stretches(paf_in: &std::path::Path) -> std::io::Result<HashMap<String, (i64, i64)>> {
-    let mut found: HashMap<String, (i64, Vec<i64>)> = HashMap::new();
-    for line in BufReader::new(File::open(paf_in)?).lines() {
-        let line = line?;
-        let mut f = line.splitn(7, '\t');
-        let (Some(q), _, _, _, _, Some(t)) = (f.next(), f.next(), f.next(), f.next(), f.next(), f.next()) else {
-            continue;
-        };
-        if q != t {
-            continue;
-        }
-        if let Some(a) = Alignment::from_line(&line).filter(Alignment::is_fold_back) {
-            let entry = found.entry(a.query_name.clone()).or_insert((a.query_length as i64, Vec::new()));
-            entry.1.push(a.fold_center());
-        }
-    }
-    Ok(found
-        .into_iter()
-        .map(|(name, (len, centers))| (name, longest_unfolded_stretch(&centers, len)))
-        .collect())
 }
 
 /// Enum for alignment classification
@@ -410,11 +352,6 @@ pub fn run_alignment_filtering(
     let mut overlaps: HashMap<(usize, usize), Overlap> = HashMap::new();
 
     let mut self_alignments_skipped: usize = 0;
-    // reads that fold back on themselves (self-alignment on the opposite strand), and the part of
-    // each that is kept. Known before the alignments are read: of two alignments between the same
-    // reads only the longest is stored, and it must not be the one on the discarded half.
-    let kept_stretch = fold_back_stretches(paf_in)?;
-    let mut fold_back_skipped: usize = 0;
     let mut alignment_length_skipped: usize = 0;
     let mut percent_identity_skipped: usize = 0;
 
@@ -432,19 +369,6 @@ pub fn run_alignment_filtering(
             // skip self alignments
             if record.is_self_alignment() {
                 self_alignments_skipped += 1;
-                continue;
-            }
-
-            // alignments that fall in the discarded part of a fold-back read are repeats of the kept part
-            let outside_kept = |name: &str, start: i64, end: i64| {
-                kept_stretch
-                    .get(name)
-                    .is_some_and(|&(ks, ke)| end.min(ke) - start.max(ks) < i64::from(*min_overlap_length))
-            };
-            if outside_kept(&record.query_name, record.query_start, record.query_end)
-                || outside_kept(&record.target_name, record.target_start, record.target_end)
-            {
-                fold_back_skipped += 1;
                 continue;
             }
 
@@ -569,29 +493,6 @@ pub fn run_alignment_filtering(
         read.coverage_end = best.1 as u32;
     }
 
-    // A fold-back read is a chimera of a sequence and its reverse complement: everything after
-    // the turning point repeats what came before. Such reads are among the longest ones and end
-    // up as the terminal read of a contig, where they replace the real contig end by a mirror
-    // image. Keep the longest stretch between turning points (so a long genuine part of the
-    // read is not lost) and let the usual clipping of alignments to the trimmed read do the rest.
-    let mut fold_back_trimmed = 0usize;
-    let mut fold_back_bases = 0u64;
-    for (name, &(seg_start, seg_end)) in &kept_stretch {
-        let Some(&id) = read_name2read_id.get(name) else { continue };
-        let read = &mut reads[id];
-        fold_back_bases += read.per_base_coverage.len() as u64 - (seg_end - seg_start) as u64;
-        let start = read.coverage_start.max(seg_start as u32);
-        let end = read.coverage_end.min(seg_end as u32);
-        if end > start {
-            read.coverage_start = start;
-            read.coverage_end = end;
-        } else {
-            read.coverage_start = 0;
-            read.coverage_end = 0;
-        }
-        fold_back_trimmed += 1;
-    }
-
     // classify alignments and update contained reads set
     for ((query_id, target_id), alignment) in &alignments {
         let _alignment_type = match classify_alignment(
@@ -652,10 +553,6 @@ pub fn run_alignment_filtering(
         self_alignments_skipped,
         alignment_length_skipped,
         percent_identity_skipped
-    );
-    println!(
-        "Fold-back (self-inverted) reads trimmed: {} ({} bases removed, {} alignments to the discarded part skipped)",
-        fold_back_trimmed, fold_back_bases, fold_back_skipped
     );
     println!(
         "Alignments clipped to coverage-trimmed reads: {} ({} bases)",
