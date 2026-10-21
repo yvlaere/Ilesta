@@ -201,6 +201,10 @@ pub struct AssembleArgs {
     #[arg(long, default_value_t = 0.8f64, help_heading = "Assembly")]
     pub short_edge_ratio: f64,
 
+    /// Minimum overlap length in the rescue stage (the unmapped reads are short and low coverage)
+    #[arg(long, default_value_t = 1000u32, help_heading = "Assembly")]
+    pub rescue_min_overlap_length: u32,
+
     /// Disable rescue of poorly represented reads (enabled by default)
     #[arg(long, action = clap::ArgAction::SetTrue, help_heading = "Assembly")]
     pub no_rescue: bool,
@@ -349,5 +353,13 @@ mod tests {
         assert!(assemble(&["assemble", "-r", "r.fq"]).rescue_enabled());
         assert!(!assemble(&["assemble", "-r", "r.fq", "--no-rescue"]).rescue_enabled());
         assert!(parse(&["assemble", "-r", "r.fq", "--rescue"]).is_err());
+    }
+
+    #[test]
+    fn rescue_overlap_length_defaults_to_1000_and_can_be_changed() {
+        let a = assemble(&["assemble", "-r", "r.fq"]);
+        assert_eq!((a.overlap.min_overlap_length, a.rescue_min_overlap_length), (2000, 1000));
+        let a = assemble(&["assemble", "-r", "r.fq", "--rescue-min-overlap-length", "1500", "-l", "3000"]);
+        assert_eq!((a.overlap.min_overlap_length, a.rescue_min_overlap_length), (3000, 1500));
     }
 }

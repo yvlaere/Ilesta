@@ -233,7 +233,7 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
                 &out_path,
                 out_dir,
                 &args.reads,
-                &args.overlap,
+                &cli::OverlapOpts { min_overlap_length: args.rescue_min_overlap_length, ..args.overlap.clone() },
                 &mut graph,
                 &mut overlaps,
             )?;
