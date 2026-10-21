@@ -65,6 +65,12 @@ fn format_utc_timestamp(seconds: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
+/// Check whether a file starts with the gzip magic number.
+pub fn is_gzip(path: &Path) -> std::io::Result<bool> {
+    let mut magic = [0u8; 2];
+    Ok(File::open(path)?.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b])
+}
+
 /// Opens a FASTQ file for buffered reading, automatically decompressing if gzipped.
 pub fn open_fastq_reader(path: &Path) -> std::io::Result<Box<dyn BufRead>> {
     let mut file = File::open(path)?;

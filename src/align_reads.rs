@@ -159,17 +159,39 @@ fn estimate_from_paf(paf: impl BufRead) -> Option<(f64, u64)> {
     Some((coverage, (total_bases as f64 / coverage) as u64))
 }
 
+/// Names and lengths of all reads of a FASTQ file, without writing a copy.
+fn scan_fastq(input: &Path) -> std::io::Result<Vec<(String, u32)>> {
+    let mut reader = crate::utils::open_fastq_reader(input)?;
+    let mut reads = Vec::new();
+    let (mut header, mut seq, mut plus, mut qual, mut line) =
+        (String::new(), String::new(), String::new(), String::new(), String::new());
+    while crate::utils::read_fastq_record_into(reader.as_mut(), &mut header, &mut seq, &mut plus, &mut qual, &mut line)? {
+        if !seq.is_empty() {
+            reads.push((header.trim_start_matches('@').to_string(), seq.len() as u32));
+        }
+    }
+    Ok(reads)
+}
+
+/// Read filtering. Returns the file that holds the reads that passed, and their names and lengths.
+///
+/// With filtering disabled a plain FASTQ is used as it is (it is only scanned for names and
+/// lengths). A gzipped input is always written out as a plain copy: every later step reads the
+/// reads again (genome size estimation, selection, rescue), and decompressing 3-7 Gb of FASTQ each
+/// time takes far longer than reading a plain copy.
+fn prepare_reads(opts: &ReadOpts, out_dir: &Path) -> std::io::Result<(PathBuf, Vec<(String, u32)>)> {
+    let input = Path::new(&opts.reads_fq);
+    if opts.min_read_length == 0 && opts.min_base_quality <= 0.0 && !crate::utils::is_gzip(input)? {
+        return Ok((input.to_path_buf(), scan_fastq(input)?));
+    }
+    let filtered_all = out_dir.join("filtered_all.fq");
+    let reads = filter_fastq(input, &filtered_all, opts.min_read_length, opts.min_base_quality)?;
+    Ok((filtered_all, reads))
+}
+
 pub fn align_reads(opts: &ReadOpts, out_dir: &Path) -> std::io::Result<AlignReadsResult> {
     let paf = out_dir.join(&opts.paf);
-    let filtered_all = out_dir.join("filtered_all.fq");
-    let reads = crate::utils::timed_step("Filter reads", || {
-        filter_fastq(
-            Path::new(&opts.reads_fq),
-            &filtered_all,
-            opts.min_read_length,
-            opts.min_base_quality,
-        )
-    })?;
+    let (filtered_all, reads) = crate::utils::timed_step("Filter reads", || prepare_reads(opts, out_dir))?;
     let filtered_bases: u64 = reads.iter().map(|r| r.1 as u64).sum();
     println!("Filtered reads: {} ({} bases)", reads.len(), filtered_bases);
 
