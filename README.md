@@ -2,106 +2,92 @@
 
 [![DOI](https://zenodo.org/badge/1043754381.svg)](https://doi.org/10.5281/zenodo.18699305)
 
-Ilesta is a de novo genome assembler for long reads. It processes all-vs-all alignments of long-read sequencing data to detect overlaps, construct an overlap graph, and generate assembly unitigs. It does not have a consensus step, so it should be paired with a polishing tool.
+Ilesta assembles long reads using the Overlap-Layout-Consensus approach.
 
 ## Installation
 
-Ilesta uses [minimap2](https://github.com/lh3/minimap2) for alignment. The Bioconda package installs it automatically. For other installation methods, minimap2 must be available on the PATH.
+Ilesta uses [minimap2](https://github.com/lh3/minimap2) for read alignment. The Bioconda package installs minimap2 automatically. For binary and source installations, install minimap2 separately and make sure it is available on your `PATH`.
 
-Option 1: Bioconda (recommended)
+### Option 1: Bioconda (recommended)
 
 ```bash
-conda create -n Ilesta_env
-conda activate Ilesta_env
-conda install -c bioconda ilesta
+conda create -n ilesta_env -c bioconda ilesta
+conda activate ilesta
 ```
 
-Option 2: Precompiled binaries:
+### Option 2: Precompiled binary
 
 ```bash
-# Download the binary
-mkdir Ilesta; cd Ilesta
-wget https://github.com/yvlaere/Ilesta/releases/download/v1.3.0/ilesta-linux-x86_64
+mkdir Ilesta
+cd Ilesta
+wget https://github.com/yvlaere/Ilesta/releases/download/v1.4.0/ilesta-linux-x86_64
 chmod +x ilesta-linux-x86_64
 mv ilesta-linux-x86_64 Ilesta
 
-# Add Ilesta to your PATH (optional, for easy access):
+# Optional: add Ilesta to PATH
 export PATH="$PWD:$PATH"
 ```
 
-Option 3: Build from source (requires Rust 1.85.0 or above):
+### Option 3: Build from source
+
+Use a Rust toolchain that satisfies the requirements in `Cargo.toml`.
 
 ```bash
-# Build the release
 git clone https://github.com/yvlaere/Ilesta.git
 cd Ilesta
 cargo build --release
 
-# Add Ilesta to your PATH (optional, for easy access):
+# Optional: add the binary to PATH
 export PATH="$PWD/target/release:$PATH"
 ```
 
-## Usage
-
-A demonstration of the usage of Ilesta using data from: https://doi.org/10.3389/fmicb.2025.1532788
+## Quick usage
 
 ```bash
-# Download data, using SRR28262566 as an example
-prefetch SRR28262566; cd SRR28262566
-fasterq-dump SRR28262566.sra
-
-# Start the assembly
-Ilesta assemble --reads-fq SRR28262566.fastq --output-dir out_dir --threads 16
+Ilesta assemble \
+  --reads-fq SRR28262566.fastq \
+  --output-dir out_dir \
+  --threads 16 \
+  --min-read-length 1000 \
+  --min-base-quality 10
 ```
 
-Use `--seed 42` with `assemble` or `alignment-filtering` for reproducible
-results with identical inputs, options, and tool versions. Seed `0` uses sorted
-traversal; nonzero seeds use a deterministic shuffle of sorted traversal keys.
-Without a seed, traversal order remains unspecified. FASTQ input may also be gzip-compressed.
+The read-length and mean-quality filters are optional and read filtering is **disabled by default**. FASTQ input may be plain or gzip-compressed. Ilesta estimates genome size from read overlaps unless `--genome-size` is supplied.
 
-This will produce:
+Use `--seed 42` with `assemble` or `alignment-filtering` for reproducible results. Seed `0` uses sorted traversal.
 
-```text
-out_dir/
-├── alignments.paf
-├── assembly_containment.paf
-├── filtered_all.fq
-├── filtered.fq
-├── graph.dot
-├── rescue_graph/
-├── rescue_reads.fq
-├── unitigs.completion.paf
-├── unitigs.fa
-├── unitigs.first_pass.fa
-├── unitigs.gfa
-└── unitigs.overlaps.bin
-```
+### Output files
 
-Ilesta performs an initial round of read filtering (default: --min-read-length 1000 --min-base-quality 10), followed by a second round of filtering where only the longest reads are kept untill a coverage of $\pm$ 50 is reached. Filtering settings can be changed or prefiltered reads can be provided.
+| File | Description |
+| --- | --- |
+| `alignments.paf` | Final all-vs-all read alignments. |
+| `unitigs.overlaps.bin` | Serialized filtered overlaps used to build the graph. |
+| `unitigs.fa` | Final assembled unitigs in FASTA format. |
+| `unitigs.gfa` | Final assembly graph in GFA format. |
+| `assembly_containment.paf` | Alignments used to identify contained unitigs. |
+| `rescue_reads.fq`, `rescue_mapping.paf`, `rescue_graph/` | Rescue-stage files. |
+| `filtered_all.fq` | Filtered read copy when filtering or decompression requires one. |
+| `filtered.fq` | Downsampled primary assembly reads when downsampling is needed. |
 
-```bash
-# Long read polishing
-minipolish out_dir/filtered_all.fq out_dir/unitigs.gfa > polished.gfa
-
-# visualize the assembly graph
-Bandage image out_dir/unitigs.gfa out_dir/unitigs.png
-```
-Ilesta sucesfully assembles the whole bacterial chromosome as one unitig. The smaller unitigs are plasmids. 
-![Bandage visualization](image.png)
 
 ## Command Line Usage
+
+### `Ilesta --help`
 
 ```bash
 Ilesta --help
 ```
 
 ```text
+De novo genome assembly for long reads using an overlap graph
+
 Usage: Ilesta <COMMAND>
 
 Commands:
   align                Read filtering and alignment
   alignment-filtering  Alignment filtering
   assemble             Full genome assembly pipeline
+  scaffold             Read-guided bridging of an existing contig FASTA
   help                 Print this message or the help of the given subcommand(s)
 
 Options:
@@ -109,11 +95,15 @@ Options:
   -V, --version  Print version
 ```
 
+### `Ilesta assemble --help`
+
 ```bash
 Ilesta assemble --help
 ```
 
 ```text
+Full genome assembly pipeline
+
 Usage: Ilesta assemble [OPTIONS] --reads-fq <READS_FQ>
 
 Options:
@@ -122,57 +112,91 @@ Options:
 Output:
   -p, --output-prefix <OUTPUT_PREFIX>  Output prefix [default: unitigs]
   -o, --output-dir <OUTPUT_DIR>        Output directory [default: .]
+      --write-dot                      Also write the overlap graph as graph.dot
 
 Read filtering and alignment:
-  -r, --reads-fq <READS_FQ>            Input reads in FASTQ format
-      --read-type <READ_TYPE>          [default: ont] [possible values: ont, pb-clr, pb-hifi]
-  -t, --threads <THREADS>              Number of threads [default: 4]
-  -a, --paf <PAF>                      Output PAF filename [default: alignments.paf]
+  -r, --reads-fq <READS_FQ>
+          Input reads in FASTQ format
+      --read-type <READ_TYPE>
+          Read type / sequencing technology [default: ont] [possible values: ont, pb-clr, pb-hifi]
+  -t, --threads <THREADS>
+          Number of threads [default: 4]
+  -a, --paf <PAF>
+          Output PAF filename [default: alignments.paf]
       --min-read-length <MIN_READ_LENGTH>
-                                       Minimum read length [default: 1000]
+          Minimum read length (0 = no filtering) [default: 0]
   -q, --min-base-quality <MIN_BASE_QUALITY>
-                                       Minimum average quality [default: 10]
-      --genome-size <GENOME_SIZE>      Genome size (estimated if omitted)
+          Minimum average quality (0 = no filtering) [default: 0]
+      --genome-size <GENOME_SIZE>
+          Optional input genome size (if not provided, will be estimated from data)
       --target-coverage <TARGET_COVERAGE>
-                                       Target read coverage [default: 50]
+          Target read coverage for assembly input downsampling [default: 50]
       --minimap-batch-size <MINIMAP_BATCH_SIZE>
-                                       Minimap2 query minibatch size [default: 500M]
-      --minimap2-f <MINIMAP2_F>        Override minimap2's -f option
-      --minimap2-u <MINIMAP2_U>        Override minimap2's -U option
+          Minimap2 query minibatch size for self-alignment (e.g. 500M) [default: 500M]
+      --minimap2-f <MINIMAP2_F>
+          Override minimap2's -f high-frequency minimizer filter
+      --minimap2-u <MINIMAP2_U>
+          Override minimap2's -U minimizer occurrence bounds
 
 Alignment filtering:
   -l, --min-overlap-length <MIN_OVERLAP_LENGTH>
-                                       Minimum overlap length [default: 2000]
+          Minimum overlap length [default: 2000]
   -c, --min-overlap-count <MIN_OVERLAP_COUNT>
-                                       Minimum overlap count [default: 3]
+          Minimum overlap count [default: 3]
   -i, --min-percent-identity <MIN_PERCENT_IDENTITY>
-                                       Minimum percent identity [default: 5]
+          Minimum percent identity [default: 5]
       --overhang-ratio <OVERHANG_RATIO>
-                                       Overhang ratio [default: 0.8]
-      --overlaps <OVERLAPS>            Pre-computed overlaps file (skips alignment filtering)
+          Overhang ratio [default: 0.8]
+      --overlaps <OVERLAPS>
+          Pre-computed overlaps binary file (optional, if provided skips alignment filtering)
 
 Assembly:
       --max-bubble-length <MAX_BUBBLE_LENGTH>
-                                       Maximum bubble length [default: 100]
+          Maximum bubble length (used during bubble removal) [default: 100]
       --min-support-ratio <MIN_SUPPORT_RATIO>
-                                       Minimum support ratio [default: 1.1]
-      --max-tip-len <MAX_TIP_LEN>      Maximum tip length [default: 4]
-      --fuzz <FUZZ>                    Fuzz parameter [default: 10]
+          Minimum support ratio for bubble removal [default: 1.1]
+      --max-tip-len <MAX_TIP_LEN>
+          Maximum tip length for tip trimming [default: 4]
+      --fuzz <FUZZ>
+          Fuzz parameter for transitive edge reduction [default: 10]
       --cleanup-iterations <CLEANUP_ITERATIONS>
-                                       Cleanup iterations [default: 3]
+          Number of cleanup iterations to run [default: 3]
       --short-edge-ratio <SHORT_EDGE_RATIO>
-                                       Short edge ratio [default: 0.8]
-      --completion-enabled             Enable read-guided completion
-      --completion-rounds <COMPLETION_ROUNDS>
-                                       Completion rounds [default: 1]
-      --completion-min-alignment-len <COMPLETION_MIN_ALIGNMENT_LEN>
-                                       Minimum completion alignment length [default: 2000]
-      --completion-min-identity <COMPLETION_MIN_IDENTITY>
-                                       Minimum completion identity [default: 0.8]
-      --rescue-plasmids                 Rescue poorly represented reads as plasmids (enabled by default)
-      --seed <SEED>                    Optional random seed
+          Short edge removal ratio (heuristic simplification) [default: 0.8]
+      --rescue-min-overlap-length <RESCUE_MIN_OVERLAP_LENGTH>
+          Minimum overlap length in the rescue stage (the unmapped reads are short and low coverage) [default: 2000]
+      --no-rescue
+          Disable rescue of poorly represented reads (enabled by default)
+      --seed <SEED>
+          Optional random seed for reproducible results
+
+Scaffolding:
+      --scaffold-rounds <ROUNDS>
+          Contig bridging rounds (read-guided scaffolding of the final unitigs; 0 disables) [default: 2]
+      --scaffold-min-reads <MIN_READS>
+          Minimum number of reads spanning a bridge between two contigs [default: 3]
+      --scaffold-dominance <DOMINANCE>
+          A competing bridge at the same contig end may have at most this fraction of the best bridge's reads [default: 0.3]
+      --scaffold-min-alignment-len <MIN_ALIGNMENT_LEN>
+          Minimum read-to-contig alignment length used for bridging [default: 1000]
+      --scaffold-min-identity <MIN_IDENTITY>
+          Minimum read-to-contig alignment identity used for bridging [default: 0.8]
+
+Consensus:
+      --consensus-rounds <CONSENSUS_ROUNDS>
+          Consensus polishing rounds on the final unitigs (0 disables) [default: 2]
+      --consensus-window-len <CONSENSUS_WINDOW_LEN>
+          Window length (bp) for consensus calling [default: 500]
+      --consensus-min-depth <CONSENSUS_MIN_DEPTH>
+          Minimum read segments per window to re-call it (else keep draft) [default: 3]
+      --consensus-max-depth <CONSENSUS_MAX_DEPTH>
+          Maximum read segments used per window [default: 25]
 ```
 
 ## Development
 
-Ilesta is under active development.
+Run the default test suite with:
+
+```bash
+cargo test
+```
