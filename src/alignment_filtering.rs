@@ -139,7 +139,7 @@ fn classify_alignment(
     target_id: usize,
     overlaps: &mut HashMap<(usize, usize), Overlap>,
     overhang_ratio: f64,
-    reads: &Vec<Read>,
+    reads: &[Read],
     min_overlap_length: u32,
 ) -> AlignmentType {
     // overlaps are a subset of alignments where (in theory) two read edges, one from each read, are part of the alignment
@@ -280,7 +280,6 @@ fn classify_alignment(
         let edge2_len = edge2_len_i64 as u32;
 
         // shared stats
-        let _overlap_len = r.alignment_block_length;
         let identity = r.percent_identity() as f64;
 
         // create overlap object and store if the overlap is valid
@@ -329,7 +328,6 @@ fn classify_alignment(
         let edge2_len = edge2_len_i64 as u32;
 
         // shared stats
-        let _overlap_len = r.alignment_block_length;
         let identity = r.percent_identity() as f64;
 
         // create overlap object and store
@@ -633,14 +631,8 @@ mod tests {
 
     fn classify(a: &Alignment, reads: &[Read]) -> Option<Overlap> {
         let mut overlaps = HashMap::new();
-        classify_alignment(a, 0, 1, &mut overlaps, 0.2, &reads.to_vec(), 500);
+        classify_alignment(a, 0, 1, &mut overlaps, 0.2, reads, 500);
         overlaps.remove(&(0, 1))
-    }
-
-    impl Clone for Read {
-        fn clone(&self) -> Self {
-            Read { per_base_coverage: Vec::new(), coverage_start: self.coverage_start, coverage_end: self.coverage_end }
-        }
     }
 
     /// t starts 1000 bp before q. q is coverage-trimmed to start at 400, so the t -> q edge is

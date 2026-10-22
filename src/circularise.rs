@@ -121,22 +121,12 @@ mod tests {
         }
     }
 
-    fn minimap2_available() -> bool {
-        std::process::Command::new("minimap2")
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    }
-
     /// A 60 kb ring that was walked 20 kb too far (the last 20 kb repeat the first 20 kb with
     /// ~3% noise) is cut back to 60 kb and marked circular; a unitig without overlapping ends
     /// is left alone.
     #[test]
+    #[ignore = "requires minimap2 on PATH"]
     fn trims_and_marks_an_overrun_unitig() {
-        if !minimap2_available() {
-            eprintln!("minimap2 not found, skipping");
-            return;
-        }
         let mut state = 99u64;
         let mut next = move || {
             state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);

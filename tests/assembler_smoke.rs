@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const SMOKE_READ_COUNT: usize = 10_000;
 
 #[test]
+#[ignore = "requires the local evaluation dataset and minimap2 on PATH"]
 fn assembles_a_sample_from_the_evaluation_dataset() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let dataset = manifest_dir.join("evaluation/test_data/SRR28262566.fastq");

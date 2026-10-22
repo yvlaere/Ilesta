@@ -356,9 +356,9 @@ mod tests {
     }
 
     #[test]
-    fn rescue_overlap_length_defaults_to_1000_and_can_be_changed() {
+    fn rescue_overlap_length_defaults_to_2000_and_can_be_changed() {
         let a = assemble(&["assemble", "-r", "r.fq"]);
-        assert_eq!((a.overlap.min_overlap_length, a.rescue_min_overlap_length), (2000, 1000));
+        assert_eq!((a.overlap.min_overlap_length, a.rescue_min_overlap_length), (2000, 2000));
         let a = assemble(&["assemble", "-r", "r.fq", "--rescue-min-overlap-length", "1500", "-l", "3000"]);
         assert_eq!((a.overlap.min_overlap_length, a.rescue_min_overlap_length), (3000, 1500));
     }

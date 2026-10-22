@@ -178,22 +178,12 @@ mod tests {
     }
 }
 
-fn minimap2_available() -> bool {
-        std::process::Command::new("minimap2")
-            .arg("--version")
-            .output()
-            .is_ok_and(|o| o.status.success())
-    }
-
     /// A 6 kb copy of a longer unitig with ~4% substitutions and indels (what two unpolished
     /// unitigs of the same region look like) must be recognised as contained; an unrelated
     /// unitig must not.
     #[test]
+    #[ignore = "requires minimap2 on PATH"]
     fn removes_a_diverged_copy_but_not_an_unrelated_unitig() {
-        if !minimap2_available() {
-            eprintln!("minimap2 not found, skipping");
-            return;
-        }
         let mut state = 12345u64;
         let mut next = move || {
             state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
