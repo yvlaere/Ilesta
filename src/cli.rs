@@ -84,10 +84,6 @@ pub struct ReadOpts {
     #[arg(short = 'q', long, default_value_t = 0.0, help_heading = "Read filtering and alignment")]
     pub min_base_quality: f32,
 
-    /// Keep fold-back reads (reads whose second half is the reverse complement of the first)
-    #[arg(long, action = clap::ArgAction::SetTrue, help_heading = "Read filtering and alignment")]
-    pub keep_fold_back_reads: bool,
-
     /// Optional input genome size (if not provided, will be estimated from data)
     #[arg(long, help_heading = "Read filtering and alignment")]
     pub genome_size: Option<u32>,

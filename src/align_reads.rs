@@ -82,12 +82,6 @@ fn subsample_fastq(
             break;
         }
     }
-    write_selected_reads(input, output, &selected)?;
-    Ok((total, selected.len()))
-}
-
-/// Copy the reads whose name is in `selected` from `input` to `output`.
-fn write_selected_reads(input: &Path, output: &Path, selected: &HashSet<&str>) -> std::io::Result<()> {
     let mut reader = crate::utils::open_fastq_reader(input)?;
     let mut writer = BufWriter::new(File::create(output)?);
     while let Some((header, seq, plus, qual)) = crate::utils::read_fastq_record(reader.as_mut())? {
@@ -95,125 +89,8 @@ fn write_selected_reads(input: &Path, output: &Path, selected: &HashSet<&str>) -
             write!(writer, "{header}\n{seq}\n{plus}\n{qual}\n")?;
         }
     }
-    writer.flush()
-}
-
-/// A read is removed as fold-back when its hairpin (both arms) covers at least this fraction of
-/// it. A read with a small hairpin is mostly genuine sequence and does no harm.
-const MIN_FOLD_BACK_FRACTION: f64 = 0.25;
-/// Reads whose hairpins are looked for are processed in chunks of about this many bases.
-const FOLD_BACK_CHUNK_BASES: usize = 64_000_000;
-
-/// For the reads in `wanted`: the fraction of the read covered by its hairpin, for those that have one.
-fn find_hairpins(input: &Path, wanted: &HashSet<&str>, threads: usize) -> std::io::Result<HashMap<String, f64>> {
-    let mut found = HashMap::new();
-    let mut chunk: Vec<(String, String)> = Vec::new();
-    let mut chunk_bases = 0;
-    let process = |chunk: &mut Vec<(String, String)>, found: &mut HashMap<String, f64>| {
-        let per_thread = chunk.len().div_ceil(threads.max(1)).max(1);
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = chunk
-                .chunks(per_thread)
-                .map(|part| {
-                    scope.spawn(move || {
-                        part.iter()
-                            .filter_map(|(name, seq)| {
-                                crate::fold_back::find_hairpin(seq.as_bytes())
-                                    .map(|h| (name.clone(), h.span as f64 / seq.len() as f64))
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                })
-                .collect();
-            for handle in handles {
-                found.extend(handle.join().expect("hairpin search panicked"));
-            }
-        });
-        chunk.clear();
-    };
-    let mut reader = crate::utils::open_fastq_reader(input)?;
-    let (mut header, mut seq, mut plus, mut qual, mut line) =
-        (String::new(), String::new(), String::new(), String::new(), String::new());
-    while crate::utils::read_fastq_record_into(reader.as_mut(), &mut header, &mut seq, &mut plus, &mut qual, &mut line)? {
-        let name = header.trim_start_matches('@');
-        if wanted.contains(name) {
-            chunk_bases += seq.len();
-            chunk.push((name.to_string(), std::mem::take(&mut seq)));
-            if chunk_bases >= FOLD_BACK_CHUNK_BASES {
-                process(&mut chunk, &mut found);
-                chunk_bases = 0;
-            }
-        }
-    }
-    process(&mut chunk, &mut found);
-    Ok(found)
-}
-
-/// Keep the longest reads until `target_bases` is reached, leaving out fold-back reads. Fold-back
-/// reads are replaced by the next longest reads, so the coverage of the selection does not drop.
-/// Only the reads that can end up in the selection are searched for hairpins. Returns the number
-/// of reads selected.
-fn select_longest_reads(
-    input: &Path,
-    output: &Path,
-    reads: &[(String, u32)],
-    target_bases: u64,
-    threads: usize,
-    remove_fold_back: bool,
-) -> std::io::Result<usize> {
-    if !remove_fold_back {
-        return Ok(subsample_fastq(input, output, reads, target_bases)?.1);
-    }
-    let mut by_length: Vec<&(String, u32)> = reads.iter().collect();
-    by_length.sort_by_key(|r| std::cmp::Reverse(r.1));
-
-    let mut checked = 0; // by_length[..checked] has been searched
-    let mut hairpins: HashMap<String, f64> = HashMap::new();
-    let mut budget = target_bases.saturating_add(target_bases / 4);
-    let (selected, removed, removed_bases, small) = loop {
-        // search the next batch of candidates
-        let mut end = checked;
-        let mut batch_bases = 0u64;
-        while end < by_length.len() && batch_bases < budget {
-            batch_bases += by_length[end].1 as u64;
-            end += 1;
-        }
-        let wanted: HashSet<&str> = by_length[checked..end].iter().map(|r| r.0.as_str()).collect();
-        if !wanted.is_empty() {
-            hairpins.extend(find_hairpins(input, &wanted, threads)?);
-        }
-        checked = end;
-
-        // walk the reads by length, skipping fold-back reads
-        let (mut selected, mut bases, mut removed, mut removed_bases, mut small) = (HashSet::new(), 0u64, 0, 0u64, 0);
-        let mut reached = false;
-        for r in &by_length[..checked] {
-            match hairpins.get(&r.0) {
-                Some(&f) if f >= MIN_FOLD_BACK_FRACTION => {
-                    removed += 1;
-                    removed_bases += r.1 as u64;
-                    continue;
-                }
-                Some(_) => small += 1,
-                None => {}
-            }
-            selected.insert(r.0.as_str());
-            bases += r.1 as u64;
-            if bases >= target_bases {
-                reached = true;
-                break;
-            }
-        }
-        if reached || checked == by_length.len() {
-            break (selected, removed, removed_bases, small);
-        }
-        budget = budget.saturating_add(budget / 2);
-    };
-    println!(
-        "Fold-back reads left out of the selection: {removed} ({removed_bases} bases); {small} reads with smaller hairpins kept"
-    );
-    write_selected_reads(input, output, &selected)?;
-    Ok(selected.len())
+    writer.flush()?;
+    Ok((total, selected.len()))
 }
 
 /// All-vs-all alignment of a read file against itself.
@@ -363,25 +240,17 @@ pub fn align_reads(opts: &ReadOpts, out_dir: &Path) -> std::io::Result<AlignRead
     );
 
     let target_bases = genome_size.saturating_mul(opts.target_coverage as u64);
+    let total_bases: u64 = reads.iter().map(|r| r.1 as u64).sum();
     let (primary, primary_read_count) = crate::utils::timed_step(
         "Select primary reads and create final alignment",
         || -> std::io::Result<(PathBuf, usize)> {
-            let primary = out_dir.join("filtered.fq");
-            let selected = select_longest_reads(
-                &filtered_all,
-                &primary,
-                &reads,
-                target_bases,
-                opts.threads,
-                !opts.keep_fold_back_reads,
-            )?;
-            if aligned_all && selected == reads.len() {
-                // the estimation alignment already covers exactly these reads
-                std::fs::remove_file(&primary)?;
+            if aligned_all && target_bases >= total_bases {
                 Ok((filtered_all.clone(), reads.len()))
             } else {
+                let primary = out_dir.join("filtered.fq");
+                let (_, n) = subsample_fastq(&filtered_all, &primary, &reads, target_bases)?;
                 align_all_vs_all(&primary, &paf, opts)?;
-                Ok((primary, selected))
+                Ok((primary, n))
             }
         },
     )?;
