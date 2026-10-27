@@ -8,6 +8,8 @@ use std::path::Path;
 /// containment. This is measured on base-level alignments (`-c`) of unitigs that are still
 /// unpolished, so two copies of the same sequence typically agree on ~90-95% of the bases.
 const MIN_IDENTITY: f64 = 0.75;
+/// Minimum fraction of the query that needs to be covered
+const MIN_QUERY_COVERAGE: f64 = 0.90;
 /// minimap2 options of the all-vs-all unitig alignment. `-c` is essential: without it minimap2
 /// reports the matches of the seed chain (a small fraction of the bases at ONT error rates)
 const MINIMAP2_ARGS: &[&str] = &["-x", "asm20", "-DP", "-c"];
@@ -80,7 +82,7 @@ fn contained_unitig_ids(reader: impl BufRead) -> io::Result<HashSet<usize>> {
     for ((query_name, target_name), mut alignment) in alignments {
         if alignment.target_length < alignment.query_length
             || (alignment.target_length == alignment.query_length && target_name >= query_name)
-            || covered_query_fraction(&mut alignment.intervals, alignment.query_length) <= 0.95
+            || covered_query_fraction(&mut alignment.intervals, alignment.query_length) <= MIN_QUERY_COVERAGE
         {
             continue;
         }
