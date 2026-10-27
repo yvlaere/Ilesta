@@ -92,17 +92,17 @@ pub struct ReadOpts {
     #[arg(long, default_value_t = 50u32, help_heading = "Read filtering and alignment")]
     pub target_coverage: u32,
 
-    /// Minimap2 query minibatch size for self-alignment (e.g. 500M)
+    /// Override minimap2's -K query minibatch size for self-alignment (e.g. 500M)
     #[arg(long, default_value = "500M", help_heading = "Read filtering and alignment")]
-    pub minimap_batch_size: String,
+    pub minimap2_K: String,
 
     /// Override minimap2's -f high-frequency minimizer filter
     #[arg(long, help_heading = "Read filtering and alignment")]
     pub minimap2_f: Option<String>,
 
     /// Override minimap2's -U minimizer occurrence bounds
-    #[arg(long, help_heading = "Read filtering and alignment")]
-    pub minimap2_u: Option<String>,
+    #[arg(long, default_value = "10,5000", help_heading = "Read filtering and alignment")]
+    pub minimap2_U: Option<String>,
 }
 
 /// Overlap filtering options (shared by `alignment-filtering` and `assemble`).
@@ -121,7 +121,7 @@ pub struct OverlapOpts {
     pub min_percent_identity: f32,
 
     /// Overhang ratio
-    #[arg(long, default_value_t = 0.8, help_heading = "Alignment filtering")]
+    #[arg(long, default_value_t = 0.2, help_heading = "Alignment filtering")]
     pub overhang_ratio: f32,
 }
 
@@ -343,9 +343,9 @@ mod tests {
     #[test]
     fn read_options_defaults_and_overrides() {
         let a = align(&["align", "-r", "reads.fq"]);
-        assert_eq!((a.reads.target_coverage, a.reads.minimap_batch_size.as_str()), (50, "500M"));
-        let a = assemble(&["assemble", "-r", "r.fq", "--target-coverage", "20", "--minimap-batch-size", "100M"]);
-        assert_eq!((a.reads.target_coverage, a.reads.minimap_batch_size.as_str()), (20, "100M"));
+        assert_eq!((a.reads.target_coverage, a.reads.minimap2_K.as_str()), (50, "500M"));
+        let a = assemble(&["assemble", "-r", "r.fq", "--target-coverage", "20", "--minimap2-K", "100M"]);
+        assert_eq!((a.reads.target_coverage, a.reads.minimap2_K.as_str()), (20, "100M"));
     }
 
     #[test]
