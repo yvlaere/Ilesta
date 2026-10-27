@@ -85,7 +85,8 @@ pub fn run_rescue_stage(
         genome_size: Some(assembly_len.clamp(1, u32::MAX as u64) as u32),
         target_coverage,
         minimap2_f: Some("0.001".into()),
-        minimap2_u: Some("10,5000".into()),
+        minimap2_K: reads.minimap2_K.clone(),
+        minimap2_U: reads.minimap2_U.clone(),
         ..reads.clone()
     };
     let rescued = crate::align_reads::align_reads(&rescue_opts, &dir)?;
