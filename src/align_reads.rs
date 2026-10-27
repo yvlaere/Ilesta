@@ -99,10 +99,10 @@ fn align_all_vs_all(reads: &Path, paf: &Path, opts: &ReadOpts) -> std::io::Resul
     if let Some(f) = &opts.minimap2_f {
         args.extend(["-f", f]);
     }
-    if let Some(u) = &opts.minimap2_u {
+    if let Some(u) = &opts.minimap2_U {
         args.extend(["-U", u]);
     }
-    args.extend(["-K", &opts.minimap_batch_size]);
+    args.extend(["-K", &opts.minimap2_K]);
     crate::utils::timed_step("Run minimap2 all-vs-all alignment", || {
         crate::utils::run_minimap2(&args, opts.threads, reads, reads, paf)
     })
