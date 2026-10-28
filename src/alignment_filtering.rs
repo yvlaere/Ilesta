@@ -3,6 +3,7 @@
 /// 1) Read all alignments, store them if they pass basic filters (no self-alignment, overlap length, identity), only store the longest alignment per read pair
 /// 2) Calculate coverage statistics per reads
 /// 3) Classify alignments into internal matches, contained reads, proper overlaps
+use crate::ui;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::File;
@@ -352,6 +353,8 @@ pub fn run_alignment_filtering(
     opts: &crate::cli::OverlapOpts,
 ) -> Result<AlignmentFilteringOutput, Box<dyn std::error::Error>> {
     let crate::cli::OverlapOpts { min_overlap_length, min_overlap_count, min_percent_identity, overhang_ratio } = opts;
+    CLIPPED.store(0, std::sync::atomic::Ordering::Relaxed);
+    CLIPPED_BASES.store(0, std::sync::atomic::Ordering::Relaxed);
     // Setup data structures
     // read name to read id mapping
     let mut read_name2read_id: HashMap<String, usize> = HashMap::new();
@@ -471,7 +474,7 @@ pub fn run_alignment_filtering(
                         alignments.insert((query_id, target_id), record.clone());
                     }
                 } else {
-                    println!("Warning: alignment existence inconsistency detected.");
+                    crate::ui::warn("alignment existence inconsistency detected");
                 }
             }
             // we don't have an alignment between these reads yet
@@ -575,31 +578,34 @@ pub fn run_alignment_filtering(
         .keys()
         .flat_map(|(q_id, t_id)| [*q_id, *t_id])
         .collect();
-    println!(
-        "Alignment filtering: {} reads, {} alignments retained; {} self-alignments, {} short alignments, {} low-identity alignments skipped",
-        reads.len(),
-        alignments.len(),
-        self_alignments_skipped,
-        alignment_length_skipped,
-        percent_identity_skipped
-    );
-    println!(
-        "Fold-back (self-inverted) reads removed: {} ({} bases)",
-        fold_back_names.len(),
-        fold_back_names.values().map(|&l| u64::from(l)).sum::<u64>()
-    );
-    println!(
-        "Alignments clipped to coverage-trimmed reads: {} ({} bases)",
-        CLIPPED.load(std::sync::atomic::Ordering::Relaxed),
-        CLIPPED_BASES.load(std::sync::atomic::Ordering::Relaxed)
-    );
-    println!(
-        "Graph input: {} reads, {} overlaps ({} contained, {} low-coverage reads removed)",
-        graph_reads.len(),
-        overlaps.len(),
-        contained_reads.len(),
-        low_coverage_reads.len()
-    );
+    ui::detail(format!(
+        "{} reads · {} alignments kept",
+        ui::count(reads.len() as u64),
+        ui::count(alignments.len() as u64)
+    ));
+    ui::detail(format!(
+        "skipped: {} self, {} short, {} low-identity alignments",
+        ui::count(self_alignments_skipped as u64),
+        ui::count(alignment_length_skipped as u64),
+        ui::count(percent_identity_skipped as u64)
+    ));
+    ui::detail(format!(
+        "fold-back reads removed: {} ({})",
+        ui::count(fold_back_names.len() as u64),
+        ui::bp(fold_back_names.values().map(|&l| u64::from(l)).sum::<u64>())
+    ));
+    ui::detail(format!(
+        "alignments clipped to coverage-trimmed reads: {} ({})",
+        ui::count(CLIPPED.load(std::sync::atomic::Ordering::Relaxed)),
+        ui::bp(CLIPPED_BASES.load(std::sync::atomic::Ordering::Relaxed))
+    ));
+    ui::detail(format!(
+        "overlap graph input: {} reads · {} overlaps ({} contained, {} low-coverage reads removed)",
+        ui::count(graph_reads.len() as u64),
+        ui::count(overlaps.len() as u64),
+        ui::count(contained_reads.len() as u64),
+        ui::count(low_coverage_reads.len() as u64)
+    ));
 
     Ok(AlignmentFilteringOutput { overlaps })
 }
