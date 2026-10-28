@@ -63,7 +63,7 @@ impl CompressedGraph {
         Ok(CompressedGraph { unitigs, edges: Vec::new() })
     }
 
-    pub fn write_gfa(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn write_gfa(&self, path: &str, read_lines: bool) -> Result<(), Box<dyn std::error::Error>> {
         let mut file = std::fs::File::create(path)?;
         use std::io::Write;
         // header
@@ -113,15 +113,15 @@ impl CompressedGraph {
         }
 
         // 'a' lines: annotate which reads were used to create each unitig
-        for u in &self.unitigs {
+        for u in self.unitigs.iter().filter(|_| read_lines) {
             let utg_name = format!("unitig_{}_{}", u.id, u.topology);
             let mut utg_pos: u32 = 0;
 
-            for (i, m) in u.members.iter().enumerate() {
-                // for all but the last member, use edge.1
-                // for the last member, take its full contribution
-                let contrib_len = if i == u.members.len() - 1 {
-                    // last member: assume parse_node_id gives the coverage slice length
+            for m in &u.members {
+                // Each member contributes the part of its read up to the next member, like
+                // `unitig_sequence`; only the last member of a linear unitig (no target) contributes
+                // its whole slice. The last member of a circular unitig points back to the first one.
+                let contrib_len = if m.edge.0.is_empty() {
                     let (_read_name, read_start, read_end, _ori) =
                         parse_node_id(&m.node_id).map_err(|e| format!("a-line error: {}", e))?;
                     read_end - read_start
