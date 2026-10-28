@@ -679,7 +679,7 @@ fn plan_bridges(
             continue;
         }
         if seqs[r].len() > MAX_REPEAT_DROP {
-            println!("  keeping repeat contig {r} ({} bp): too long to be a resolved repeat", seqs[r].len());
+            crate::ui::detail(format!("keeping repeat contig {r} ({}): too long to be a resolved repeat", crate::ui::bp(seqs[r].len() as u64)));
             continue;
         }
         let sig: Vec<Vec<OEnd>> = [false, true]
@@ -689,7 +689,7 @@ fn plan_bridges(
             .collect();
         let copies = sig.iter().map(Vec::len).max().unwrap_or(0).max(1);
         if sig.iter().flatten().all(|e| anchors[e.0]) && used >= copies {
-            println!("  dropping resolved repeat contig {r} ({} bp)", seqs[r].len());
+            crate::ui::detail(format!("dropping resolved repeat contig {r} ({})", crate::ui::bp(seqs[r].len() as u64)));
             plan.removed.insert(r);
         }
     }
@@ -754,7 +754,7 @@ pub fn scaffold_graph(
         let seqs: Vec<String> = graph.unitigs.iter().map(|u| u.fasta_seq.as_deref().unwrap_or("").to_ascii_uppercase()).collect();
         let circular: Vec<bool> = graph.unitigs.iter().map(|u| u.topology == 'c').collect();
         let plan = crate::utils::timed_step(
-            &format!("Contig bridging round {round}/{}", opts.rounds),
+            &format!("Bridge contigs, round {round}/{}", opts.rounds),
             || plan_bridges(&seqs, &circular, reads, work_dir, opts, (threads, read_type)),
         )?;
         let scaffold_count = plan.scaffolds.len();
@@ -764,7 +764,7 @@ pub fn scaffold_graph(
             break;
         }
         apply_plan(graph, &plan);
-        println!("Bridging round {round}: {scaffold_count} scaffolds, {} unitigs remain", graph.unitigs.len());
+        crate::ui::detail(format!("round {round}: {scaffold_count} scaffolds, {} unitigs remain", graph.unitigs.len()));
     }
     Ok(total)
 }
