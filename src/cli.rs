@@ -44,7 +44,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Read filtering and alignment
+    /// Read selection and alignment
     Align(AlignReadsArgs),
 
     /// Alignment filtering
@@ -57,51 +57,51 @@ pub enum Commands {
     Scaffold(ScaffoldArgs),
 }
 
-/// Read filtering and all-vs-all alignment options (shared by `align` and `assemble`).
+/// Read input, read selection and all-vs-all alignment options (shared by `align` and `assemble`).
 #[derive(Args, Clone)]
 pub struct ReadOpts {
     /// Input reads in FASTQ format
-    #[arg(short = 'r', long, help_heading = "Read filtering and alignment")]
+    #[arg(short = 'r', long, help_heading = "Read processing and alignment")]
     pub reads_fq: String,
 
     /// Read type / sequencing technology
-    #[arg(long, default_value = "ont", help_heading = "Read filtering and alignment")]
+    #[arg(long, default_value = "ont", help_heading = "Read processing and alignment")]
     pub read_type: ReadType,
 
     /// Number of threads
-    #[arg(short = 't', long, default_value_t = 4, help_heading = "Read filtering and alignment")]
+    #[arg(short = 't', long, default_value_t = 4, help_heading = "Read processing and alignment")]
     pub threads: usize,
 
     /// Output PAF filename
-    #[arg(short = 'a', long, default_value = "alignments.paf", help_heading = "Read filtering and alignment")]
+    #[arg(short = 'a', long, default_value = "alignments.paf", help_heading = "Read processing and alignment")]
     pub paf: String,
 
     /// Minimum read length (0 = no filtering)
-    #[arg(long, default_value_t = 0, help_heading = "Read filtering and alignment")]
+    #[arg(long, default_value_t = 0, help_heading = "Read processing and alignment")]
     pub min_read_length: u32,
 
     /// Minimum average quality (0 = no filtering)
-    #[arg(short = 'q', long, default_value_t = 0.0, help_heading = "Read filtering and alignment")]
+    #[arg(short = 'q', long, default_value_t = 0.0, help_heading = "Read processing and alignment")]
     pub min_base_quality: f32,
 
     /// Optional input genome size (if not provided, will be estimated from data)
-    #[arg(long, help_heading = "Read filtering and alignment")]
+    #[arg(long, help_heading = "Read processing and alignment")]
     pub genome_size: Option<u32>,
 
     /// Target read coverage for assembly input downsampling
-    #[arg(long, default_value_t = 50u32, help_heading = "Read filtering and alignment")]
+    #[arg(long, default_value_t = 50u32, help_heading = "Read processing and alignment")]
     pub target_coverage: u32,
 
     /// Override minimap2's -K query minibatch size for self-alignment (e.g. 500M)
-    #[arg(long, default_value = "500M", help_heading = "Read filtering and alignment")]
+    #[arg(long, default_value = "500M", help_heading = "Read processing and alignment")]
     pub minimap2_K: String,
 
     /// Override minimap2's -f high-frequency minimizer filter
-    #[arg(long, help_heading = "Read filtering and alignment")]
+    #[arg(long, help_heading = "Read processing and alignment")]
     pub minimap2_f: Option<String>,
 
     /// Override minimap2's -U minimizer occurrence bounds
-    #[arg(long, default_value = "10,5000", help_heading = "Read filtering and alignment")]
+    #[arg(long, default_value = "10,5000", help_heading = "Read processing and alignment")]
     pub minimap2_U: Option<String>,
 }
 
@@ -152,9 +152,9 @@ pub struct AlignmentFilteringArgs {
     #[command(flatten)]
     pub overlap: OverlapOpts,
 
-    /// Optional random seed for reproducible results
-    #[arg(long)]
-    pub seed: Option<u64>,
+    /// Seed (the same seed gives the same result)
+    #[arg(long, default_value_t = 42u64)]
+    pub seed: u64,
 }
 
 #[derive(Args)]
@@ -213,6 +213,11 @@ pub struct AssembleArgs {
     #[arg(long, action = clap::ArgAction::SetTrue, help_heading = "Output")]
     pub write_dot: bool,
 
+    /// Keep intermediate files (alignments, selected reads, overlaps) in the output directory.
+    /// By default only the FASTA and GFA remain
+    #[arg(long, action = clap::ArgAction::SetTrue, help_heading = "Output")]
+    pub keep_intermediate: bool,
+
     #[command(flatten)]
     pub scaffold: ScaffoldOpts,
 
@@ -232,9 +237,9 @@ pub struct AssembleArgs {
     #[arg(long, default_value_t = 25usize, help_heading = "Consensus")]
     pub consensus_max_depth: usize,
 
-    /// Optional random seed for reproducible results
-    #[arg(long, help_heading = "Assembly")]
-    pub seed: Option<u64>,
+    /// Seed (the same seed gives the same result)
+    #[arg(long, default_value_t = 42u64, help_heading = "Assembly")]
+    pub seed: u64,
 }
 
 impl AssembleArgs {
