@@ -1,6 +1,7 @@
-// Read filtering, genome size estimation and all-vs-all alignment before assembly
+// // Read loading, optional filtering, genome size estimation, read selection and all-vs-all alignment before assembly
 
 use crate::cli::ReadOpts;
+use crate::ui
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -103,7 +104,7 @@ fn align_all_vs_all(reads: &Path, paf: &Path, opts: &ReadOpts) -> std::io::Resul
         args.extend(["-U", u]);
     }
     args.extend(["-K", &opts.minimap2_K]);
-    crate::utils::timed_step("Run minimap2 all-vs-all alignment", || {
+    crate::utils::timed_step("Align reads all-vs-all", || {
         crate::utils::run_minimap2(&args, opts.threads, reads, reads, paf)
     })
 }
@@ -173,7 +174,7 @@ fn scan_fastq(input: &Path) -> std::io::Result<Vec<(String, u32)>> {
     Ok(reads)
 }
 
-/// Read filtering. Returns the file that holds the reads that passed, and their names and lengths.
+/// Read loading. Returns the file that holds the reads to use, and their names and lengths.
 ///
 /// With filtering disabled a plain FASTQ is used as it is (it is only scanned for names and
 /// lengths). A gzipped input is always written out as a plain copy: every later step reads the
@@ -191,9 +192,22 @@ fn prepare_reads(opts: &ReadOpts, out_dir: &Path) -> std::io::Result<(PathBuf, V
 
 pub fn align_reads(opts: &ReadOpts, out_dir: &Path) -> std::io::Result<AlignReadsResult> {
     let paf = out_dir.join(&opts.paf);
-    let (filtered_all, reads) = crate::utils::timed_step("Filter reads", || prepare_reads(opts, out_dir))?;
-    let filtered_bases: u64 = reads.iter().map(|r| r.1 as u64).sum();
-    println!("Filtered reads: {} ({} bases)", reads.len(), filtered_bases);
+    // Length and quality filtering is off by default; the step is then just a scan.
+    let step = if opts.min_read_length > 0 || opts.min_base_quality > 0.0 {
+        "Filter reads by length and quality"
+    } else if crate::utils::is_gzip(Path::new(&opts.reads_fq))? {
+        "Decompress input reads"
+    } else {
+        "Scan input reads"
+    };
+    let (filtered_all, reads) = crate::utils::timed_step(step, || prepare_reads(opts, out_dir))?;
+    let total_bases: u64 = reads.iter().map(|r| r.1 as u64).sum();
+    ui::detail(format!(
+        "{} reads · {} · N50 {}",
+        ui::count(reads.len() as u64),
+        ui::bp(total_bases),
+        ui::bp(ui::n50(reads.iter().map(|r| r.1 as u64)))
+    ));
 
     // `aligned_all`: the estimation alignment already covers every read, so it can double as the final one.
     let mut aligned_all = false;
@@ -220,42 +234,41 @@ pub fn align_reads(opts: &ReadOpts, out_dir: &Path) -> std::io::Result<AlignRead
                     std::fs::remove_file(subsample)?;
                     let (coverage, size) = estimate.ok_or_else(|| {
                     std::io::Error::other(
-                        "no read overlaps found, cannot estimate the genome size; provide --genome-size",
-                    )
-                })?;
-                    println!("Estimated coverage: {coverage:.2}x");
+                            "no read overlaps found, cannot estimate the genome size; provide --genome-size",
+                        )
+                    })?;
+                    ui::detail(format!("estimated coverage: {coverage:.1}x"));
                     Ok(size)
                 }
             }
         },
     )?;
-    println!(
-        "Genome size: {} bases{}",
-        genome_size,
-        if opts.genome_size.is_some() {
-            " (provided)"
-        } else {
-            " (estimated)"
-        }
-    );
+    ui::detail(format!(
+        "genome size {} ({})",
+        ui::bp(genome_size),
+        if opts.genome_size.is_some() { "provided" } else { "estimated" }
+    ));
 
     let target_bases = genome_size.saturating_mul(opts.target_coverage as u64);
-    let total_bases: u64 = reads.iter().map(|r| r.1 as u64).sum();
-    let (primary, primary_read_count) = crate::utils::timed_step(
-        "Select primary reads and create final alignment",
-        || -> std::io::Result<(PathBuf, usize)> {
+    let (primary, primary_read_count, primary_bases) = crate::utils::timed_step(
+        "Select reads and align them",
+        || -> std::io::Result<(PathBuf, usize, u64)> {
             if aligned_all && target_bases >= total_bases {
-                Ok((filtered_all.clone(), reads.len()))
+                Ok((filtered_all.clone(), reads.len(), total_bases))
             } else {
                 let primary = out_dir.join("filtered.fq");
-                let (_, n) = subsample_fastq(&filtered_all, &primary, &reads, target_bases)?;
+                let (bases, n) = subsample_fastq(&filtered_all, &primary, &reads, target_bases)?;
                 align_all_vs_all(&primary, &paf, opts)?;
-                Ok((primary, n))
+                Ok((primary, n, bases))
             }
         },
     )?;
-    println!("Primary assembly reads: {primary_read_count}");
-    println!("All-vs-all alignments: {}", paf.display());
+    ui::detail(format!(
+        "selected {} reads · {} · {:.0}x of the genome",
+        ui::count(primary_read_count as u64),
+        ui::bp(primary_bases),
+        primary_bases as f64 / genome_size.max(1) as f64
+    ));
 
     Ok(AlignReadsResult {
         primary_reads: primary,
