@@ -88,8 +88,12 @@ fn contained_unitig_ids(reader: impl BufRead) -> io::Result<HashSet<usize>> {
         }
         if alignment.query_length >= REPORT_MIN_LEN {
             let covered = covered_query_fraction(&mut alignment.intervals, alignment.query_length);
-            println!("  removing {query_name} ({} bp): {:.1}% covered by {target_name} ({} bp)",
-                alignment.query_length, 100.0 * covered, alignment.target_length);
+            crate::ui::detail(format!(
+                "removing {query_name} ({}): {:.1}% covered by {target_name} ({})",
+                crate::ui::bp(alignment.query_length as u64),
+                100.0 * covered,
+                crate::ui::bp(alignment.target_length as u64)
+            ));
         }
 
         if let Some(id) = query_name
