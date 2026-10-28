@@ -1,8 +1,8 @@
 //! Consensus (self-polishing) step
 //!
 //! Method:
-//!   1. Map the assembly reads back to the contigs with `minimap2 -c`.
-//!   2. Cut every contig into windows (default ~500 bp) and use each CIGAR to
+//!   1. Map the assembly reads back to the unitigs with `minimap2 -c`.
+//!   2. Cut every unitig into windows (default ~500 bp) and use each CIGAR to
 //!      split every read alignment at the window borders.
 //!   3. Per window, build a partial-order alignment (POA) graph: the draft
 //!      window is the backbone, each read segment is aligned to the graph
@@ -10,7 +10,7 @@
 //!   4. The heaviest path through the POA graph is the new window sequence.
 //!   5. The windows are concatenated; the whole procedure can be repeated
 //!
-//! Circular contigs (`topology == 'c'`) are mapped with a flank of the
+//! Circular unitigs (`topology == 'c'`) are mapped with a flank of the
 //! opposite end on each side so that reads crossing the origin contribute to
 //! the windows on both sides of it, and the windows are tiled around the ring.
 //!
@@ -70,16 +70,16 @@ const MIN_IDENTITY: f64 = 0.6;
 /// A path node is kept only if at least this fraction of the local median
 /// read depth supports it (majority rule).
 const MIN_SUPPORT: f64 = 0.5;
-/// Flank (bp) added to each side of circular contigs while mapping.
+/// Flank (bp) added to each side of circular unitigs while mapping.
 const CIRC_FLANK: usize = 2000;
-/// contigs shorter than this are left untouched.
+/// Unitigs shorter than this are left untouched.
 const MIN_CONTIG_LEN: usize = 100;
 
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
-/// Polish all contigs of `graph` in place.
+/// Polish all unitigs of `graph` in place.
 ///
 /// `reads_path` is the FASTQ(.gz) that was used for assembly (it is only read,
 /// never modified).  Intermediate files are written to `work_dir` and removed.
@@ -90,12 +90,12 @@ pub fn polish_graph(
     params: &ConsensusParams,
 ) -> Result<ConsensusStats, Box<dyn Error>> {
     let mut stats = ConsensusStats::default();
-    if params.rounds == 0 || graph.contigs.is_empty() {
+    if params.rounds == 0 || graph.unitigs.is_empty() {
         return Ok(stats);
     }
 
     let mut contigs: Vec<Contig> = graph
-        .contigs
+        .unitigs
         .iter()
         .map(|u| Contig {
             seq: u
@@ -131,8 +131,8 @@ pub fn polish_graph(
     }
     stats.bases_after = contigs.iter().map(|c| c.seq.len()).sum();
 
-    for (contig, contig) in graph.contigs.iter_mut().zip(contigs.into_iter()) {
-        contig.fasta_seq = Some(String::from_utf8(contig.seq)?);
+    for (unitig, contig) in graph.unitigs.iter_mut().zip(contigs.into_iter()) {
+        unitig.fasta_seq = Some(String::from_utf8(contig.seq)?);
     }
 
     Ok(stats)

@@ -2,26 +2,26 @@ use crate::alignment_filtering::Overlap;
 use crate::create_overlap_graph::OverlapGraph;
 use crate::utils;
 /// graph compression module
-/// creates a compressed graph of contigs from an overlap graph
+/// creates a compressed graph of unitigs from an overlap graph
 /// 1. get the indegree and outdegree of each node
-/// 2. get non-circular contigs (start at nodes with indegree != 1 or outdegree != 1)
-/// 3. get circular contigs (remaining unvisited nodes)
+/// 2. get non-circular unitigs (start at nodes with indegree != 1 or outdegree != 1)
+/// 3. get circular unitigs (remaining unvisited nodes)
 use std::collections::{HashMap, HashSet};
 
-pub struct contigMember {
+pub struct UnitigMember {
     pub node_id: String,
     // id of target node and edge length to that node
     pub edge: (String, u32),
 }
 
-pub struct contig {
+pub struct Unitig {
     pub id: usize,
-    pub members: Vec<contigMember>,
+    pub members: Vec<UnitigMember>,
     pub fasta_seq: Option<String>,
     pub topology: char,
 }
 
-pub struct contigEdge {
+pub struct UnitigEdge {
     pub from: usize,
     pub to: usize,
     pub from_ori: char,
@@ -32,35 +32,35 @@ pub struct contigEdge {
 }
 
 pub struct CompressedGraph {
-    pub contigs: Vec<contig>,
-    pub edges: Vec<contigEdge>,
+    pub unitigs: Vec<Unitig>,
+    pub edges: Vec<UnitigEdge>,
 }
 
 impl CompressedGraph {
-    /// Write all contig sequences as FASTA.
+    /// Write all unitig sequences as FASTA.
     pub fn write_fasta(&self, path: &std::path::Path) -> std::io::Result<()> {
         use std::io::Write;
         let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
-        for u in &self.contigs {
+        for u in &self.unitigs {
             let seq = u.fasta_seq.as_deref().unwrap_or("");
-            writeln!(out, ">contig_{} len={}bp topology={}\n{seq}", u.id, seq.len(), u.topology)?;
+            writeln!(out, ">unitig_{} len={}bp topology={}\n{seq}", u.id, seq.len(), u.topology)?;
         }
         out.flush()
     }
 
     /// Read contigs from a FASTA file (no edges); `topology=c` in a header marks a circular contig.
     pub fn from_fasta(path: &std::path::Path) -> std::io::Result<CompressedGraph> {
-        let mut contigs: Vec<contig> = Vec::new();
+        let mut unitigs: Vec<Unitig> = Vec::new();
         for line in std::io::BufRead::lines(std::io::BufReader::new(std::fs::File::open(path)?)) {
             let line = line?;
             if let Some(header) = line.strip_prefix('>') {
                 let topology = if header.contains("topology=c") { 'c' } else { 'l' };
-                contigs.push(contig { id: contigs.len(), members: Vec::new(), fasta_seq: Some(String::new()), topology });
-            } else if let Some(seq) = contigs.last_mut().and_then(|u| u.fasta_seq.as_mut()) {
+                unitigs.push(Unitig { id: unitigs.len(), members: Vec::new(), fasta_seq: Some(String::new()), topology });
+            } else if let Some(seq) = unitigs.last_mut().and_then(|u| u.fasta_seq.as_mut()) {
                 seq.push_str(line.trim());
             }
         }
-        Ok(CompressedGraph { contigs, edges: Vec::new() })
+        Ok(CompressedGraph { unitigs, edges: Vec::new() })
     }
 
     pub fn write_gfa(&self, path: &str, read_lines: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -70,16 +70,16 @@ impl CompressedGraph {
         writeln!(file, "H\tVN:Z:1.0")?;
 
         // segments
-        for u in &self.contigs {
-            let sid = format!("contig_{}_{}", u.id, u.topology);
+        for u in &self.unitigs {
+            let sid = format!("unitig_{}_{}", u.id, u.topology);
             let seq = u.fasta_seq.as_deref().unwrap_or("*");
             writeln!(file, "S\t{}\t{}", sid, seq)?;
         }
 
-        // Add circularising links for contigs that are circular (first member's node_id == last member's edge.0)
-        for u in &self.contigs {
+        // Add circularising links for unitigs that are circular (first member's node_id == last member's edge.0)
+        for u in &self.unitigs {
             if u.topology == 'c' {
-                let from = format!("contig_{}_{}", u.id, u.topology);
+                let from = format!("unitig_{}_{}", u.id, u.topology);
                 let to = from.clone();
                 let cigar = format!("{}M", 0);
                 writeln!(file, "L\t{}\t+\t{}\t+\t{}", from, to, cigar)?;
@@ -90,19 +90,19 @@ impl CompressedGraph {
         // other links
         let mut edge_set = std::collections::HashSet::new();
         for e in &self.edges {
-            // get from contig
+            // get from unitig
             let from_utg = self
-                .contigs
+                .unitigs
                 .iter()
                 .find(|u| u.id == e.from)
-                .ok_or("invalid edge: from contig not found")?;
+                .ok_or("invalid edge: from unitig not found")?;
             let to_utg = self
-                .contigs
+                .unitigs
                 .iter()
                 .find(|u| u.id == e.to)
-                .ok_or("invalid edge: to contig not found")?;
-            let from = format!("contig_{}_{}", e.from, from_utg.topology);
-            let to = format!("contig_{}_{}", e.to, to_utg.topology);
+                .ok_or("invalid edge: to unitig not found")?;
+            let from = format!("unitig_{}_{}", e.from, from_utg.topology);
+            let to = format!("unitig_{}_{}", e.to, to_utg.topology);
             let cigar = format!("{}M", e.overlap_len);
             writeln!(
                 file,
@@ -112,15 +112,15 @@ impl CompressedGraph {
             edge_set.insert((e.from, e.to));
         }
 
-        // 'a' lines: annotate which reads were used to create each contig
-        for u in self.contigs.iter().filter(|_| read_lines) {
-            let utg_name = format!("contig_{}_{}", u.id, u.topology);
+        // 'a' lines: annotate which reads were used to create each unitig
+        for u in self.unitigs.iter().filter(|_| read_lines) {
+            let utg_name = format!("unitig_{}_{}", u.id, u.topology);
             let mut utg_pos: u32 = 0;
 
             for m in &u.members {
                 // Each member contributes the part of its read up to the next member, like
-                // `contig_sequence`; only the last member of a linear contig (no target) contributes
-                // its whole slice. The last member of a circular contig points back to the first one.
+                // `unitig_sequence`; only the last member of a linear unitig (no target) contributes
+                // its whole slice. The last member of a circular unitig points back to the first one.
                 let contrib_len = if m.edge.0.is_empty() {
                     let (_read_name, read_start, read_end, _ori) =
                         parse_node_id(&m.node_id).map_err(|e| format!("a-line error: {}", e))?;
@@ -149,16 +149,16 @@ impl CompressedGraph {
     }
 }
 
-fn set_contig_topologies(contigs: &mut [contig], overlaps: &HashMap<(usize, usize), Overlap>) {
-    for contig in contigs {
-        if contig.members.len() <= 1 {
+fn set_unitig_topologies(unitigs: &mut [Unitig], overlaps: &HashMap<(usize, usize), Overlap>) {
+    for unitig in unitigs {
+        if unitig.members.len() <= 1 {
             continue;
         }
 
-        let first = &contig.members[0].node_id;
-        let last = &contig.members[contig.members.len() - 1].edge.0;
+        let first = &unitig.members[0].node_id;
+        let last = &unitig.members[unitig.members.len() - 1].edge.0;
         if !last.is_empty() && last == first {
-            contig.topology = 'c';
+            unitig.topology = 'c';
         }
 
         for overlap in overlaps.values() {
@@ -167,7 +167,7 @@ fn set_contig_topologies(contigs: &mut [contig], overlaps: &HashMap<(usize, usiz
                 || (overlap.rc_source_name == *first && overlap.rc_sink_name == *last)
                 || (overlap.rc_source_name == *last && overlap.rc_sink_name == *first)
             {
-                contig.topology = 'c';
+                unitig.topology = 'c';
                 break;
             }
         }
@@ -213,9 +213,9 @@ fn parse_node_id(node_id: &str) -> Result<(&str, u32, u32, char), String> {
     Ok((read_name, start, end, ori))
 }
 
-/// Main function: compress maximal non-branching paths into contigs.
+/// Main function: compress maximal non-branching paths into unitigs.
 /// Preserves member lists and the overlap lengths between them.
-pub fn compress_contigs(
+pub fn compress_unitigs(
     graph: &OverlapGraph,
     overlaps: &HashMap<(usize, usize), Overlap>,
     fastq_path: &std::path::Path,
@@ -232,7 +232,7 @@ pub fn compress_contigs(
     }
 
     let mut visited: HashSet<String> = HashSet::new();
-    let mut contigs: Vec<contig> = Vec::new();
+    let mut unitigs: Vec<Unitig> = Vec::new();
 
     // Helper to extract the single outgoing neighbor if outdeg == 1
     let out_single = |g: &OverlapGraph, cur: &str| -> Option<(String, u32)> {
@@ -246,7 +246,7 @@ pub fn compress_contigs(
         })
     };
 
-    // 2) non-circular contigs, start contigs at nodes where indegree != 1 || outdeg != 1
+    // 2) non-circular unitigs, start unitigs at nodes where indegree != 1 || outdeg != 1
     let node_ids = crate::utils::order_keys(graph.nodes.keys().cloned());
     for id in &node_ids {
         let node = &graph.nodes[id];
@@ -258,15 +258,15 @@ pub fn compress_contigs(
             continue;
         }
 
-        // start a contig if indegree != 1 or outdegree != 1 (i.e., not a simple internal node)
+        // start a unitig if indegree != 1 or outdegree != 1 (i.e., not a simple internal node)
         if indegree_i != 1 || outdeg_i != 1 {
-            // create a contig for each outgoing edge
-            // if outdeg == 0, there will be no contig, each outgoing edge will be zero-indexed
+            // create a unitig for each outgoing edge
+            // if outdeg == 0, there will be no unitig, each outgoing edge will be zero-indexed
             for out_edge_i in 0..outdeg_i {
-                // start a new contig from id
-                let mut members: Vec<contigMember> = Vec::new();
+                // start a new unitig from id
+                let mut members: Vec<UnitigMember> = Vec::new();
                 let mut cur = id.clone();
-                //members.push(contigMember { node_id: cur.clone(), overlap_from_prev: 0 });
+                //members.push(UnitigMember { node_id: cur.clone(), overlap_from_prev: 0 });
                 visited.insert(cur.clone());
 
                 // check the next outgoing edge
@@ -274,8 +274,8 @@ pub fn compress_contigs(
                     let e = &node.edges[out_edge_i];
                     (e.target_id.clone(), e.edge_len)
                 };
-                // push the first node into the contig members
-                members.push(contigMember {
+                // push the first node into the unitig members
+                members.push(UnitigMember {
                     node_id: cur.clone(),
                     edge: (second.clone(), edge_len),
                 });
@@ -304,8 +304,8 @@ pub fn compress_contigs(
                     if visited.contains(&next) {
                         break;
                     }
-                    // push cur to the contig members
-                    members.push(contigMember {
+                    // push cur to the unitig members
+                    members.push(UnitigMember {
                         node_id: cur.clone(),
                         edge: (next.clone(), edge_len),
                     });
@@ -314,14 +314,14 @@ pub fn compress_contigs(
                 }
 
                 // add the final node
-                members.push(contigMember {
+                members.push(UnitigMember {
                     node_id: cur.clone(),
                     edge: (String::new(), 0),
                 });
 
-                // create the contig
-                let uid = contigs.len();
-                contigs.push(contig {
+                // create the unitig
+                let uid = unitigs.len();
+                unitigs.push(Unitig {
                     id: uid,
                     members,
                     fasta_seq: None,
@@ -331,16 +331,16 @@ pub fn compress_contigs(
         }
     }
 
-    // 3) circular contigs, handle remaining nodes that are still unvisited
+    // 3) circular unitigs, handle remaining nodes that are still unvisited
     let circular_ids = crate::utils::order_keys(graph.nodes.keys().cloned());
     for id in &circular_ids {
         if visited.contains(id) {
             continue;
         }
 
-        // start a circular contig
+        // start a circular unitig
         let mut cur = id.clone();
-        let mut members: Vec<contigMember> = Vec::new();
+        let mut members: Vec<UnitigMember> = Vec::new();
 
         loop {
             visited.insert(cur.clone());
@@ -352,8 +352,8 @@ pub fn compress_contigs(
             }
             let (next, edge_len) = next_edge.unwrap();
 
-            // push cur to the contig members
-            members.push(contigMember {
+            // push cur to the unitig members
+            members.push(UnitigMember {
                 node_id: cur.clone(),
                 edge: (next.clone(), edge_len),
             });
@@ -372,9 +372,9 @@ pub fn compress_contigs(
             cur = next;
         }
 
-        // register contig
-        let uid = contigs.len();
-        contigs.push(contig {
+        // register unitig
+        let uid = unitigs.len();
+        unitigs.push(Unitig {
             id: uid,
             members,
             fasta_seq: None,
@@ -382,46 +382,46 @@ pub fn compress_contigs(
         });
     }
 
-    // 4) build edges between contigs based on original overlap graph
+    // 4) build edges between unitigs based on original overlap graph
 
-    // remove empty contigs (can happen if there are isolated nodes with no edges)
-    contigs.retain(|u| !u.members.is_empty());
-    let mut contig_ends: HashMap<usize, (String, String)> = HashMap::new();
+    // remove empty unitigs (can happen if there are isolated nodes with no edges)
+    unitigs.retain(|u| !u.members.is_empty());
+    let mut unitig_ends: HashMap<usize, (String, String)> = HashMap::new();
     // (start_node_id, end_node_id)
 
 
-    let mut node_to_contig: HashMap<String, usize> = HashMap::new();
-    for u in &contigs {
+    let mut node_to_unitig: HashMap<String, usize> = HashMap::new();
+    for u in &unitigs {
         let start = u.members.first().unwrap().node_id.clone();
         let end = u.members.last().unwrap().node_id.clone();
-        contig_ends.insert(u.id, (start, end));
+        unitig_ends.insert(u.id, (start, end));
 
         for m in &u.members {
-            node_to_contig.insert(m.node_id.clone(), u.id);
+            node_to_unitig.insert(m.node_id.clone(), u.id);
         }
     }
 
-    let mut contig_edge_map: HashMap<(usize, usize, char, char), contigEdge> = HashMap::new();
+    let mut unitig_edge_map: HashMap<(usize, usize, char, char), UnitigEdge> = HashMap::new();
     for (source_id, node) in &graph.nodes {
-        if let Some(&from_uid) = node_to_contig.get(source_id) {
-            let (from_start, from_end) = &contig_ends[&from_uid];
+        if let Some(&from_uid) = node_to_unitig.get(source_id) {
+            let (from_start, from_end) = &unitig_ends[&from_uid];
             let from_is_start = source_id == from_start;
             let _from_is_end = source_id == from_end;
             let from_orient = if from_is_start { '+' } else { '-' };
 
             for e in &node.edges {
-                if let Some(&to_uid) = node_to_contig.get(&e.target_id) {
+                if let Some(&to_uid) = node_to_unitig.get(&e.target_id) {
                     if from_uid == to_uid {
                         continue;
                     }
 
-                    let (to_start, to_end) = &contig_ends[&to_uid];
+                    let (to_start, to_end) = &unitig_ends[&to_uid];
                     let to_is_start = e.target_id == *to_start;
                     let _to_is_end = e.target_id == *to_end;
                     let to_orient = if to_is_start { '+' } else { '-' };
 
                     let key = (from_uid, to_uid, from_orient, to_orient);
-                    let entry = contig_edge_map.entry(key).or_insert(contigEdge {
+                    let entry = unitig_edge_map.entry(key).or_insert(UnitigEdge {
                         from: from_uid,
                         to: to_uid,
                         from_ori: from_orient,
@@ -446,9 +446,9 @@ pub fn compress_contigs(
         }
     }
 
-    let mut edges: Vec<contigEdge> = contig_edge_map.into_values().collect();
+    let mut edges: Vec<UnitigEdge> = unitig_edge_map.into_values().collect();
 
-    // remove one orientation of every contig pair
+    // remove one orientation of every unitig pair
 
     // helper function to strip the orientation from a node_id
     fn stripped_node_id(node_id: &str) -> String {
@@ -456,8 +456,8 @@ pub fn compress_contigs(
         format!("{}:{}-{}", read, start, end)
     }
 
-    // helper function to get the signature (vector of member names) of a contig
-    fn contig_signature(u: &contig) -> Vec<String> {
+    // helper function to get the signature (vector of member names) of a unitig
+    fn unitig_signature(u: &Unitig) -> Vec<String> {
         let mut sig: Vec<String> = u
             .members
             .iter()
@@ -469,15 +469,15 @@ pub fn compress_contigs(
         sig
     }
 
-    // vector of all reads that have been used in contigs
+    // vector of all reads that have been used in unitigs
     let mut seen: HashSet<String> = HashSet::new();
-    // contigs that should be kept
+    // unitigs that should be kept
     let mut keep: HashSet<usize> = HashSet::new();
 
-    contigs.sort_unstable_by_key(|u| std::cmp::Reverse(u.members.len()));
+    unitigs.sort_unstable_by_key(|u| std::cmp::Reverse(u.members.len()));
 
-    for u in contigs.iter() {
-        let sig = contig_signature(u);
+    for u in unitigs.iter() {
+        let sig = unitig_signature(u);
 
         for n in sig.iter() {
             if !seen.contains(n) {
@@ -490,30 +490,30 @@ pub fn compress_contigs(
         }
     }
 
-    // remove contigs
-    contigs.retain(|u| keep.contains(&u.id));
+    // remove unitigs
+    unitigs.retain(|u| keep.contains(&u.id));
 
-    // remove edges touching dropped contigs
+    // remove edges touching dropped unitigs
     edges.retain(|e| keep.contains(&e.from) && keep.contains(&e.to));
 
     if utils::has_seed() {
         edges.sort_unstable_by_key(|edge| (edge.from, edge.to, edge.from_ori, edge.to_ori));
     }
 
-    // load the sequences of the reads used by the contigs
-    let needed: HashSet<&str> = contigs
+    // load the sequences of the reads used by the unitigs
+    let needed: HashSet<&str> = unitigs
         .iter()
         .flat_map(|u| u.members.iter())
         .filter_map(|m| parse_node_id(&m.node_id).ok().map(|(name, ..)| name))
         .collect();
     let fastq_seqs = load_fastq_sequences(fastq_path, &needed).unwrap();
 
-    for contig in contigs.iter_mut() {
-        contig.fasta_seq = Some(contig_sequence(contig, &fastq_seqs).unwrap());
+    for unitig in unitigs.iter_mut() {
+        unitig.fasta_seq = Some(unitig_sequence(unitig, &fastq_seqs).unwrap());
     }
-    set_contig_topologies(&mut contigs, overlaps);
+    set_unitig_topologies(&mut unitigs, overlaps);
 
-    CompressedGraph { contigs, edges }
+    CompressedGraph { unitigs, edges }
 }
 
 fn load_fastq_sequences(
@@ -531,10 +531,10 @@ fn load_fastq_sequences(
     Ok(seq_map)
 }
 
-/// Build the nucleotide sequence of `contig` by concatenating node sequences and
-/// removing the overlaps recorded in contigMember.edge.(target, edge_len).
-pub fn contig_sequence(
-    contig: &contig,
+/// Build the nucleotide sequence of `unitig` by concatenating node sequences and
+/// removing the overlaps recorded in UnitigMember.edge.(target, edge_len).
+pub fn unitig_sequence(
+    unitig: &Unitig,
     fastq_seqs: &HashMap<String, String>,
 ) -> Result<String, String> {
     let get_seq = |node_id: &str| -> Result<String, String> {
@@ -547,7 +547,7 @@ pub fn contig_sequence(
     };
 
     let mut out = String::new();
-    for member in &contig.members {
+    for member in &unitig.members {
         // the last member has no target and contributes its full sequence
         let (target_id, edge_len) = &member.edge;
         let seq = get_seq(&member.node_id)?;

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 pub struct RescueResult {
     /// Rescued reads (down-sampled for assembly), to be appended to the assembly reads.
     pub reads: PathBuf,
-    /// Nodes of the rescue graph, used to report which contigs come from the rescue.
+    /// Nodes of the rescue graph, used to report which unitigs come from the rescue.
     pub node_ids: HashSet<String>,
 }
 
@@ -139,7 +139,7 @@ mod tests {
         std::fs::write(&input, rec("mapped_full") + &rec("mapped_partial") + &rec("unmapped")).unwrap();
         std::fs::write(
             &paf,
-            "mapped_full\t8\t0\t8\t+\tcontig_0\t100\t0\t8\t8\t8\t60\nmapped_partial\t8\t0\t1\t+\tcontig_1\t100\t0\t1\t1\t1\t60\n",
+            "mapped_full\t8\t0\t8\t+\tunitig_0\t100\t0\t8\t8\t8\t60\nmapped_partial\t8\t0\t1\t+\tunitig_1\t100\t0\t1\t1\t1\t60\n",
         )
         .unwrap();
         let mapped = mapped_read_names(&paf).unwrap();
