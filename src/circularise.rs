@@ -85,11 +85,12 @@ pub fn circularise_self_overlaps(
             let _ = fs::remove_file(p);
         }
         if let Some((start, end)) = ring_range(&text, len, window) {
-            println!(
-                "  circularising unitig_{} ({len} bp): its ends overlap by {} bp",
+            crate::ui::detail(format!(
+                "circularising unitig_{} ({}): its ends overlap by {}",
                 u.id,
-                len - (end - start)
-            );
+                crate::ui::bp(len as u64),
+                crate::ui::bp((len - (end - start)) as u64)
+            ));
             u.fasta_seq = Some(seq[start..end].to_string());
             u.topology = 'c';
             // the read tiling no longer describes the trimmed sequence
