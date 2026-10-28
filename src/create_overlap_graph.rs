@@ -222,9 +222,9 @@ pub fn run_create_overlap_graph(
     let edge_count: usize = g.nodes.values().map(|n| n.edges.len()).sum();
     let node_count = g.nodes.len();
     crate::ui::detail(format!(
-+        "overlap graph: {} nodes · {} directed edges",
-+        crate::ui::count(node_count as u64),
-+        crate::ui::count(edge_count as u64)
-+    ));
+        "overlap graph: {} nodes · {} directed edges",
+        crate::ui::count(node_count as u64),
+        crate::ui::count(edge_count as u64)
+    ));
     Ok(g)
 }

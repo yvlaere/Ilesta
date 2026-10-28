@@ -1,7 +1,7 @@
 // // Read loading, optional filtering, genome size estimation, read selection and all-vs-all alignment before assembly
 
 use crate::cli::ReadOpts;
-use crate::ui
+use crate::ui;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};

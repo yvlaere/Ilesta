@@ -98,6 +98,7 @@ fn check_exists(path: &str) -> Result<(), Box<dyn Error>> {
     } else {
         Err(format!("Reads file {path} does not exist").into())
     }
+}
 
 /// The command line as typed, quoted so that it can be pasted back into a shell.
 fn command_line() -> String {

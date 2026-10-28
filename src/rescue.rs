@@ -62,7 +62,7 @@ pub fn run_rescue_stage(
     let (count, bases) = write_unmapped_reads(all_reads, &rescue_fq, &mapped_read_names(&mapping_paf)?)?;
     crate::ui::detail(format!("reads not mapping to the primary assembly: {} ({})", crate::ui::count(count as u64), crate::ui::bp(bases as u64)));
     if count == 0 {
-        crate::ui::detail("no poorly represented reads found, nothing to rescue".into());
+        crate::ui::detail("no poorly represented reads found, nothing to rescue");
         return Ok(None);
     }
 

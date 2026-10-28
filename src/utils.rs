@@ -13,8 +13,9 @@ pub fn timed_step<T, E: std::fmt::Display>(
     operation: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
     crate::ui::step(label, operation)
+}
 
-fn utc_timestamp() -> String {
+pub fn utc_timestamp() -> String {
     let seconds = match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => duration.as_secs() as i64,
         Err(error) => -(error.duration().as_secs() as i64),
@@ -22,7 +23,7 @@ fn utc_timestamp() -> String {
     format_utc_timestamp(seconds)
 }
 
-pub fn format_utc_timestamp(seconds: i64) -> String {
+fn format_utc_timestamp(seconds: i64) -> String {
     let days = seconds.div_euclid(86_400);
     let day_seconds = seconds.rem_euclid(86_400);
 
