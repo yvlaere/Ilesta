@@ -12,6 +12,7 @@ mod scaffold;
 mod segment_dedup;
 mod tip_trimming;
 mod transitive_edge_reduction;
+mod ui;
 mod utils;
 
 use alignment_filtering::Overlap;
@@ -30,27 +31,26 @@ fn main() -> Result<(), Box<dyn Error>> {
             let out_dir = Path::new(&args.output_dir);
             std::fs::create_dir_all(out_dir)?;
             check_exists(&args.reads.reads_fq)?;
-            utils::timed_step("Read filtering and alignment", || {
-                align_reads::align_reads(&args.reads, out_dir)
-            })?;
+            print_header("Align", &[("reads", args.reads.reads_fq.clone()), ("output", args.output_dir.clone())]);
+            ui::plan(1);
+            ui::stage("Read processing and alignment");
+            align_reads::align_reads(&args.reads, out_dir)?;
+            print_footer();
         }
         Commands::AlignmentFiltering(args) => {
-            utils::set_seed(args.seed);
+            utils::set_seed(Some(args.seed));
             let out_dir = Path::new(&args.output_dir);
             std::fs::create_dir_all(out_dir)?;
+            print_header("Alignment Filtering", &[("alignments", args.paf.clone()), ("output", args.output_overlaps.clone())]);
+            ui::plan(1);
+            ui::stage("Overlap filtering");
             utils::timed_step("Filter alignments and write overlaps", || {
-                let out = alignment_filtering::run_alignment_filtering(
-                    &out_dir.join(&args.paf),
-                    &args.overlap,
-                )?;
+                let out = alignment_filtering::run_alignment_filtering(&out_dir.join(&args.paf), &args.overlap)?;
                 out.serialize_overlaps(&args.output_overlaps)?;
-                println!(
-                    "Filtered overlaps: {} ({})",
-                    out.overlaps.len(),
-                    args.output_overlaps
-                );
+                ui::detail(format!("wrote {} overlaps to {}", ui::count(out.overlaps.len() as u64), args.output_overlaps));
                 Ok::<_, Box<dyn Error>>(())
             })?;
+            print_footer();
         }
         Commands::Scaffold(args) => {
             let out = Path::new(&args.output);
@@ -59,21 +59,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or(Path::new("."));
             let reads = Path::new(&args.reads_fq);
+            print_header("Scaffold", &[("contigs", args.contigs.clone()), ("reads", args.reads_fq.clone()), ("output", args.output.clone())]);
+            ui::plan(1 + usize::from(args.polish_rounds > 0));
             let mut graph = compress_graph::CompressedGraph::from_fasta(Path::new(&args.contigs))?;
-            let stats = utils::timed_step("Bridge contigs", || {
-                scaffold::scaffold_graph(
-                    &mut graph,
-                    reads,
-                    work_dir,
-                    &args.scaffold,
-                    args.threads,
-                    args.read_type,
-                )
-            })?;
-            println!(
-                "Bridges applied: {}, circularised: {}",
-                stats.accepted, stats.circularised
-            );
+            ui::stage("Contig bridging");
+            let stats = scaffold::scaffold_graph(&mut graph, reads, work_dir, &args.scaffold, args.threads, args.read_type)?;
+            ui::detail(format!("bridges applied: {} · contigs circularised: {}", stats.accepted, stats.circularised));
             if args.polish_rounds > 0 {
                 let params = consensus::ConsensusParams {
                     rounds: args.polish_rounds,
@@ -83,15 +74,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                     threads: args.threads,
                     read_type: args.read_type,
                 };
-                let stats = utils::timed_step("Polish contigs", || {
-                    consensus::polish_graph(&mut graph, reads, work_dir, &params)
-                })?;
-                println!(
-                    "Consensus: {} rounds, {} -> {} bases; {} windows changed",
-                    stats.rounds_run, stats.bases_before, stats.bases_after, stats.windows_changed
-                );
+                ui::stage("Consensus polishing");
+                let stats = consensus::polish_graph(&mut graph, reads, work_dir, &params)?;
+                ui::detail(format!(
+                    "{} rounds · {} → {} · {} windows changed",
+                    stats.rounds_run,
+                    ui::bp(stats.bases_before as u64),
+                    ui::bp(stats.bases_after as u64),
+                    ui::count(stats.windows_changed as u64)
+                ));
             }
-            utils::timed_step("Write scaffolded FASTA", || graph.write_fasta(out))?;
+            graph.write_fasta(out)?;
+            print_footer();
         }
         Commands::Assemble(args) => assemble(&args)?,
     }
@@ -103,6 +97,39 @@ fn check_exists(path: &str) -> Result<(), Box<dyn Error>> {
         Ok(())
     } else {
         Err(format!("Reads file {path} does not exist").into())
+    }
+
+/// The command line as typed, quoted so that it can be pasted back into a shell.
+fn command_line() -> String {
+    let quote = |arg: String| {
+        let plain = |c: char| c.is_ascii_alphanumeric() || "_-./:=,+@%".contains(c);
+        if !arg.is_empty() && arg.chars().all(plain) { arg } else { format!("'{}'", arg.replace('\'', "'\\''")) }
+    };
+    let mut args = std::env::args();
+    let program = args.next().map(|p| Path::new(&p).file_name().map_or(p.clone(), |n| n.to_string_lossy().into_owned()));
+    program.into_iter().chain(args).map(quote).collect::<Vec<_>>().join(" ")
+}
+
+/// Run header: version, start time, the exact command line and the main inputs.
+fn print_header(command: &str, items: &[(&str, String)]) {
+    ui::banner(&format!("Ilesta {} · {command}", env!("CARGO_PKG_VERSION")));
+    ui::detail(format!("{:<10}{}", "command", command_line()));
+    ui::detail(format!("{:<10}{}", "started", utils::utc_timestamp()));
+    for (name, value) in items {
+        ui::detail(format!("{name:<10}{value}"));
+    }
+}
+
+fn print_footer() {
+    ui::banner("Done");
+    let times = ui::stage_times();
+    let width = times.iter().map(|t| t.0.chars().count()).max().unwrap_or(0) + 3;
+    for (name, seconds) in &times {
+        ui::detail(format!("{name:<width$}{}", ui::duration(*seconds)));
+    }
+    if times.len() > 1 {
+        let total = ui::duration(times.iter().map(|t| t.1).sum());
+        ui::detail(format!("{:<width$}{}", "total", ui::bold(&total)));
     }
 }
 
@@ -145,56 +172,100 @@ fn cleanup_graph(graph: &mut OverlapGraph, args: &AssembleArgs) {
 
         let before = graph.nodes.len();
         tip_trimming::trim_tips(graph, args.max_tip_len as usize);
-        println!(
-            "Iteration {iteration}: {transitive} transitive, {multi_edges} multi-, {short_edges} short edges; \
-             {bubbles} bubble, {} isolated, {} tip nodes removed",
-            isolated.len(),
-            before - graph.nodes.len()
-        );
+        ui::detail(format!(
+            "iteration {iteration}: removed {} transitive, {} multi-, {} short edges; {} bubble, {} isolated, {} tip nodes",
+            ui::count(transitive as u64),
+            ui::count(multi_edges as u64),
+            ui::count(short_edges as u64),
+            ui::count(bubbles as u64),
+            ui::count(isolated.len() as u64),
+            ui::count((before - graph.nodes.len()) as u64)
+        ));
     }
     utils::check_synchronization(graph);
-    println!(
-        "Cleaned graph: {} nodes, {} directed edges",
-        graph.nodes.len(),
-        edge_count(graph)
-    );
+    ui::detail(format!(
+        "cleaned graph: {} nodes · {} directed edges",
+        ui::count(graph.nodes.len() as u64),
+        ui::count(edge_count(graph) as u64)
+    ));
 }
 
+/// Run the assembly. Intermediate files are in `<output-dir>/<prefix>.work`, which is removed
+/// afterwards unless `--keep-intermediate` is given (then they stay in the output directory).
+/// After a failure the directory is kept so the run can be inspected.
 fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
-    utils::set_seed(args.seed);
+    utils::set_seed(Some(args.seed));
     let out_dir = Path::new(&args.output_dir);
     std::fs::create_dir_all(out_dir)?;
     check_exists(&args.reads.reads_fq)?;
+    let work_dir = if args.keep_intermediate {
+        out_dir.to_path_buf()
+    } else {
+        out_dir.join(format!("{}.work", args.output_prefix))
+    };
+    std::fs::create_dir_all(&work_dir)?;
+
+    let result = run_assembly(args, out_dir, &work_dir);
+    match &result {
+        Ok(()) if !args.keep_intermediate => {
+            std::fs::remove_dir_all(&work_dir)?;
+        }
+        Err(_) if !args.keep_intermediate => {
+            eprintln!("Intermediate files were kept in {} for inspection", work_dir.display());
+        }
+        _ => {}
+    }
+    result
+}
+
+fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<(), Box<dyn Error>> {
     let (threads, read_type) = (args.reads.threads, args.reads.read_type);
+    let polishing = args.consensus_rounds > 0;
+    let fasta_path = out_dir.join(format!("{}.fa", args.output_prefix));
+    let gfa_path = out_dir.join(format!("{}.gfa", args.output_prefix));
+    // sequence of the current unitigs, used as mapping input between the stages
+    let draft_path = work_dir.join(format!("{}.draft.fa", args.output_prefix));
 
-    let reads = utils::timed_step("Read filtering and all-vs-all alignment", || {
-        align_reads::align_reads(&args.reads, out_dir)
-    })?;
+    print_header(
+        "assemble",
+        &[
+            ("reads", args.reads.reads_fq.clone()),
+            ("output", format!("{} ({}, {})", out_dir.display(), fasta_path.file_name().unwrap().to_string_lossy(), gfa_path.file_name().unwrap().to_string_lossy())),
+            (
+                "settings",
+                format!("{threads} threads · {} reads · seed {} · target coverage {}x", format!("{read_type:?}").to_lowercase(), args.seed, args.reads.target_coverage),
+            ),
+        ],
+    );
+    ui::plan(5 + usize::from(args.rescue_enabled()) + usize::from(polishing));
 
-    // overlaps: provided, or filtered from the alignments
+    // ---- 1. reads ---------------------------------------------------------
+    ui::stage("Read processing and alignment");
+    let reads = align_reads::align_reads(&args.reads, work_dir)?;
+
+    // ---- 2. overlaps: provided, or filtered from the alignments ------------
+    ui::stage("Overlap filtering");
     let overlaps_path = match &args.overlaps {
         Some(path) => {
-            println!("Using precomputed overlaps from {path}");
+            ui::detail(format!("using precomputed overlaps from {path}"));
             PathBuf::from(path)
         }
         None => {
-            let path = out_dir.join(format!("{}.overlaps.bin", args.output_prefix));
+            let path = work_dir.join(format!("{}.overlaps.bin", args.output_prefix));
             utils::timed_step("Filter read overlaps", || {
                 let out = alignment_filtering::run_alignment_filtering(
-                    &out_dir.join(&args.reads.paf),
+                    &work_dir.join(&args.reads.paf),
                     &args.overlap,
                 )?;
                 out.serialize_overlaps(path.to_str().ok_or("invalid output path")?)?;
-                println!(
-                    "Serialized {} overlaps to {}",
-                    out.overlaps.len(),
-                    path.display()
-                );
                 Ok::<_, Box<dyn Error>>(())
             })?;
             path
         }
     };
+
+    // ---- 3. graph ---------------------------------------------------------
+    ui::stage("Graph construction");
     let (mut overlaps, mut graph): (HashMap<(usize, usize), Overlap>, OverlapGraph) =
         utils::timed_step("Create overlap graph", || {
             let overlaps: HashMap<(usize, usize), Overlap> =
@@ -212,7 +283,6 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
         })?;
     }
 
-    let out_path = out_dir.join(format!("{}.fa", args.output_prefix));
     let mut assembly_reads = reads.primary_reads.clone();
     let mut compressed = utils::timed_step("Compress graph into unitigs", || {
         Ok::<_, Box<dyn Error>>(compress_graph::compress_unitigs(
@@ -221,66 +291,56 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
             &assembly_reads,
         ))
     })?;
-    println!("Primary unitigs: {}", compressed.unitigs.len());
-    report_unitigs("primary", &compressed);
+    report_unitigs("unitigs", &compressed);
 
+    // ---- 4. rescue --------------------------------------------------------
     let mut rescued_nodes = HashSet::new();
     if args.rescue_enabled() {
-        utils::timed_step("Rescue poorly represented reads", || {
-            compressed.write_fasta(&out_path)?;
-            let rescue = rescue::run_rescue_stage(
-                &reads.filtered_reads,
-                &out_path,
-                out_dir,
-                &args.reads,
-                &cli::OverlapOpts { min_overlap_length: args.rescue_min_overlap_length, ..args.overlap.clone() },
-                &mut graph,
-                &mut overlaps,
-            )?;
-            if let Some(rescue) = rescue {
-                let combined = out_dir.join(format!("{}.combined.fq", args.output_prefix));
-                let mut file = File::create(&combined)?;
-                std::io::copy(&mut File::open(&reads.primary_reads)?, &mut file)?;
-                std::io::copy(&mut File::open(&rescue.reads)?, &mut file)?;
-                assembly_reads = combined;
-                rescued_nodes = rescue.node_ids;
-                compressed = compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads);
-                println!("Unitigs after rescue: {}", compressed.unitigs.len());
-                report_unitigs("after rescue", &compressed);
-            }
-            Ok::<_, Box<dyn Error>>(())
-        })?;
+        ui::stage("Rescue of poorly represented reads");
+        compressed.write_fasta(&draft_path)?;
+        let rescue = rescue::run_rescue_stage(
+            &reads.filtered_reads,
+            &draft_path,
+            work_dir,
+            &args.reads,
+            &cli::OverlapOpts { min_overlap_length: args.rescue_min_overlap_length, ..args.overlap.clone() },
+            &mut graph,
+            &mut overlaps,
+        )?;
+        if let Some(rescue) = rescue {
+            let combined = work_dir.join(format!("{}.combined.fq", args.output_prefix));
+            let mut file = File::create(&combined)?;
+            std::io::copy(&mut File::open(&reads.primary_reads)?, &mut file)?;
+            std::io::copy(&mut File::open(&rescue.reads)?, &mut file)?;
+            assembly_reads = combined;
+            rescued_nodes = rescue.node_ids;
+            compressed = compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads);
+            report_unitigs("unitigs after rescue", &compressed);
+        }
     }
 
-    compressed.write_fasta(&out_path)?;
+    // ---- 5. refinement ----------------------------------------------------
+    ui::stage("Contig refinement");
+    compressed.write_fasta(&draft_path)?;
     let removed = utils::timed_step("Remove contained unitigs", || {
-        segment_dedup::remove_contained_segments(&mut compressed, &out_path, out_dir, threads)
+        segment_dedup::remove_contained_segments(&mut compressed, &draft_path, work_dir, threads)
     })?;
-    println!("Contained unitigs removed: {removed}");
-    report_unitigs("after dedup", &compressed);
+    ui::detail(format!("contained unitigs removed: {removed}"));
+    report_unitigs("unitigs after dedup", &compressed);
 
     if args.scaffold.rounds > 0 {
-        let stats = utils::timed_step("Bridge unitigs", || {
-            scaffold::scaffold_graph(
-                &mut compressed,
-                &assembly_reads,
-                out_dir,
-                &args.scaffold,
-                threads,
-                read_type,
-            )
-        })?;
-        println!(
-            "Bridges applied: {}, circularised: {}",
-            stats.accepted, stats.circularised
-        );
-        report_unitigs("after bridging", &compressed);
+        let stats = scaffold::scaffold_graph(&mut compressed, &assembly_reads, work_dir, &args.scaffold, threads, read_type)?;
+        ui::detail(format!("bridges applied: {} · unitigs circularised: {}", stats.accepted, stats.circularised));
+        report_unitigs("unitigs after bridging", &compressed);
     }
     let circularised = utils::timed_step("Circularise unitigs with overlapping ends", || {
-        circularise::circularise_self_overlaps(&mut compressed, out_dir, threads)
+        circularise::circularise_self_overlaps(&mut compressed, work_dir, threads)
     })?;
-    println!("Unitigs circularised by overlapping ends: {circularised}");
-    if args.consensus_rounds > 0 {
+    ui::detail(format!("unitigs circularised by overlapping ends: {circularised}"));
+
+    // ---- 6. consensus -----------------------------------------------------
+    if polishing {
+        ui::stage("Consensus polishing");
         let params = consensus::ConsensusParams {
             rounds: args.consensus_rounds,
             window_len: args.consensus_window_len,
@@ -289,60 +349,49 @@ fn assemble(args: &AssembleArgs) -> Result<(), Box<dyn Error>> {
             threads,
             read_type,
         };
-        let stats = utils::timed_step("Polish unitig consensus", || {
-            consensus::polish_graph(&mut compressed, &assembly_reads, out_dir, &params)
-        })?;
-        println!(
-            "Consensus: {} rounds, {} -> {} bases; {} windows changed, {} lacked support",
+        let stats = consensus::polish_graph(&mut compressed, &assembly_reads, work_dir, &params)?;
+        ui::detail(format!(
+            "{} rounds · {} → {} · {} windows changed, {} lacked support",
             stats.rounds_run,
-            stats.bases_before,
-            stats.bases_after,
-            stats.windows_changed,
-            stats.windows_unsupported
-        );
-    }
-    if assembly_reads != reads.primary_reads {
-        std::fs::remove_file(&assembly_reads)?;
-    }
-    if args.consensus_rounds > 0 {
+            ui::bp(stats.bases_before as u64),
+            ui::bp(stats.bases_after as u64),
+            ui::count(stats.windows_changed as u64),
+            ui::count(stats.windows_unsupported as u64)
+        ));
+
         // Second pass on polished sequences: copies that were too diverged to be recognised in
         // the raw unitigs (and those created by bridging) align cleanly now.
-        compressed.write_fasta(&out_path)?;
+        compressed.write_fasta(&draft_path)?;
         let removed = utils::timed_step("Remove contained unitigs (polished)", || {
-            segment_dedup::remove_contained_segments(&mut compressed, &out_path, out_dir, threads)
+            segment_dedup::remove_contained_segments(&mut compressed, &draft_path, work_dir, threads)
         })?;
-        println!("Contained unitigs removed after consensus: {removed}");
+        ui::detail(format!("contained unitigs removed after polishing: {removed}"));
     }
 
-    let gfa_path = out_dir.join(format!("{}.gfa", args.output_prefix));
-    utils::timed_step("Write assembly files", || {
-        compressed.write_fasta(&out_path)?;
-        compressed.write_gfa(gfa_path.to_str().ok_or("invalid output path")?)?;
-        Ok::<_, Box<dyn Error>>(())
-    })?;
-    println!(
-        "Assembly: {} unitigs; FASTA {}; GFA {}",
-        compressed.unitigs.len(),
-        out_path.display(),
-        gfa_path.display()
-    );
+    // ---- 7. output --------------------------------------------------------
+    ui::stage("Output");
+    // The `a` lines of the GFA place reads on the unitig sequence. Polishing changes that
+    // sequence, so they are only written when it is off.
+    compressed.write_fasta(&fasta_path)?;
+    compressed.write_gfa(gfa_path.to_str().ok_or("invalid output path")?, !polishing)?;
     if !rescued_nodes.is_empty() {
-        let rescued: Vec<_> = compressed
+        let rescued = compressed
             .unitigs
             .iter()
             .filter(|u| u.members.iter().any(|m| rescued_nodes.contains(&m.node_id)))
-            .collect();
-        let bases: usize = rescued
-            .iter()
-            .map(|u| u.fasta_seq.as_ref().map_or(0, String::len))
-            .sum();
-        println!("Rescued unitigs: {} ({bases} bases)", rescued.len());
+            .count();
+        ui::detail(format!("unitigs containing rescued reads: {rescued}"));
     }
-    println!("Assembly complete.");
+    ui::detail(format!("wrote {} and {}", fasta_path.display(), gfa_path.display()));
+    if assembly_reads != reads.primary_reads {
+        std::fs::remove_file(&assembly_reads)?;
+    }
+    print_assembly_summary(&compressed);
+    print_footer();
     Ok(())
 }
 
-/// Log unitig count, total length and the largest unitigs, so a lost replicon can be traced to a stage.
+/// One-line unitig overview for a stage: count, total length and the largest unitigs.
 fn report_unitigs(stage: &str, graph: &compress_graph::CompressedGraph) {
     let mut lens: Vec<(usize, usize, char)> = graph
         .unitigs
@@ -350,9 +399,50 @@ fn report_unitigs(stage: &str, graph: &compress_graph::CompressedGraph) {
         .map(|u| (u.fasta_seq.as_ref().map_or(0, String::len), u.id, u.topology))
         .collect();
     lens.sort_unstable_by(|a, b| b.cmp(a));
-    let total: usize = lens.iter().map(|l| l.0).sum();
-    let largest: Vec<String> = lens.iter().take(4).map(|(l, id, t)| format!("unitig_{id}={l}{t}")).collect();
-    println!("Unitigs {stage}: {} ({total} bp); largest: {}", lens.len(), largest.join(", "));
+    let total: u64 = lens.iter().map(|l| l.0 as u64).sum();
+    let largest: Vec<String> = lens
+        .iter()
+        .take(3)
+        .map(|&(len, _, topology)| format!("{}{}", ui::bp(len as u64), if topology == 'c' { " (circular)" } else { "" }))
+        .collect();
+    let largest = if largest.is_empty() { String::new() } else { format!(" · largest {}", largest.join(", ")) };
+    ui::detail(format!("{stage}: {} · {}{largest}", ui::count(lens.len() as u64), ui::bp(total)));
+}
+
+/// Final overview: totals and one line per contig.
+fn print_assembly_summary(graph: &compress_graph::CompressedGraph) {
+    ui::banner("Assembly");
+    let mut contigs: Vec<(usize, &compress_graph::Unitig)> = graph
+        .unitigs
+        .iter()
+        .map(|u| (u.fasta_seq.as_ref().map_or(0, String::len), u))
+        .collect();
+    contigs.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.id.cmp(&b.1.id)));
+    let total: u64 = contigs.iter().map(|c| c.0 as u64).sum();
+    let circular = contigs.iter().filter(|c| c.1.topology == 'c').count();
+    let gc = |seq: &str| {
+        let gc = seq.bytes().filter(|b| matches!(b.to_ascii_uppercase(), b'G' | b'C')).count();
+        100.0 * gc as f64 / seq.len().max(1) as f64
+    };
+    ui::detail(format!(
+        "{} contigs ({circular} circular) · {} · N50 {} · largest {}",
+        contigs.len(),
+        ui::bp(total),
+        ui::bp(ui::n50(contigs.iter().map(|c| c.0 as u64))),
+        ui::bp(contigs.first().map_or(0, |c| c.0 as u64))
+    ));
+    for (len, unitig) in contigs.iter().take(10) {
+        ui::detail(format!(
+            "unitig_{:<5}{:>12}  {:<9}GC {:.1}%",
+            unitig.id,
+            ui::count(*len as u64),
+            if unitig.topology == 'c' { "circular" } else { "linear" },
+            gc(unitig.fasta_seq.as_deref().unwrap_or(""))
+        ));
+    }
+    if contigs.len() > 10 {
+        ui::detail(format!("… and {} more", contigs.len() - 10));
+    }
 }
 
 #[cfg(test)]
@@ -444,7 +534,7 @@ mod tests {
                 let compressed = compress_graph::compress_unitigs(&graph, &overlaps, &fastq_path);
                 compressed.write_fasta(&fasta_path).unwrap();
                 assert!(compressed.edges.len() >= 2);
-                compressed.write_gfa(gfa_path.to_str().unwrap()).unwrap();
+                compressed.write_gfa(gfa_path.to_str().unwrap(), true).unwrap();
                 let result = (
                     snapshot,
                     overlap_bytes,
