@@ -67,32 +67,24 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
     );
     let stdout = String::from_utf8_lossy(&result.stdout);
     assert!(
-        stdout
-            .lines()
-            .any(|line| line.starts_with("[20") && line.contains("Z] ")),
-        "pipeline step timestamps were not reported"
+        stdout.contains("command   Ilesta assemble"),
+        "the command line was not reported"
     );
     assert!(
-        stdout.contains("=== START:") && stdout.contains("=== FINISHED:"),
-        "pipeline stage headings and completion markers were not reported"
+        stdout.lines().any(|line| line.contains("[1/")) && stdout.contains("Done"),
+        "pipeline stage headings were not reported"
     );
     assert!(
         !stdout.contains("[M::"),
         "minimap2 diagnostics should not be forwarded to stdout"
     );
-    for artifact in [
-        "filtered_all.fq",
-        "filtered.fq",
-        "unitigs.fa",
-        "unitigs.gfa",
-    ] {
-        let path = output_dir.join(artifact);
-        assert!(
-            path.is_file(),
-            "assembler did not create {}",
-            path.display()
-        );
-    }
+    // by default only the assembly itself is left behind
+    let mut files: Vec<_> = fs::read_dir(&output_dir)
+        .expect("list output directory")
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    assert_eq!(files, ["unitigs.fa", "unitigs.gfa"]);
     let unitigs =
         fs::read_to_string(output_dir.join("unitigs.fa")).expect("read primary assembly FASTA");
     assert!(
@@ -140,27 +132,14 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
     let rescued_unitig_count = stdout
         .lines()
         .find_map(|line| {
-            line.strip_prefix("Rescued unitigs: ")
-                .and_then(|rest| rest.split_whitespace().next()?.parse::<usize>().ok())
+            line.split("unitigs containing rescued reads: ")
+                .nth(1)
+                .and_then(|rest| rest.trim().parse::<usize>().ok())
         })
         .expect("rescue unitig count was not reported");
     assert!(
         rescued_unitig_count > 0,
         "no rescued unitigs reached the combined assembly"
-    );
-    assert!(
-        fs::metadata(output_dir.join("filtered_all.fq"))
-            .expect("read filtered FASTQ metadata")
-            .len()
-            > 0,
-        "assembler filtered out every sampled read"
-    );
-    assert!(output_dir.join("rescue_reads.fq").is_file());
-    assert!(!output_dir.join("rescue_graph/rescue.fa").exists());
-    assert!(!output_dir.join("rescue_graph/rescue.gfa").exists());
-    assert!(
-        !output_dir.join("rescue_graph/rescue_graph").exists(),
-        "rescue graph recursively started another rescue round"
     );
 
     fs::remove_dir_all(temp_dir).expect("remove smoke-test temporary directory");
