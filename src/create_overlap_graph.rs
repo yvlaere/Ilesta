@@ -39,10 +39,7 @@ impl Node {
             // currently impossible due to the overlap filtering
             // handling might change in the future to handle this case
             // silently ignore duplicate edges but log for debugging
-            eprintln!(
-                "Warning: duplicate edge {} -> {} ignored",
-                self.node_id, target_node
-            );
+            crate::ui::warn(format!("duplicate edge {} -> {} ignored", self.node_id, target_node));
             return;
         }
         self.edges.push(EdgeInfo {
@@ -224,6 +221,10 @@ pub fn run_create_overlap_graph(
     // graph stats
     let edge_count: usize = g.nodes.values().map(|n| n.edges.len()).sum();
     let node_count = g.nodes.len();
-    println!("Overlap graph: {node_count} nodes, {edge_count} directed edges");
+    crate::ui::detail(format!(
++        "overlap graph: {} nodes · {} directed edges",
++        crate::ui::count(node_count as u64),
++        crate::ui::count(edge_count as u64)
++    ));
     Ok(g)
 }
