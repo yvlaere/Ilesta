@@ -5,34 +5,14 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Run a pipeline step with timestamped start, completion, and elapsed-time output.
+/// Run a pipeline step with elapsed-time output (see `ui::step`).
 pub fn timed_step<T, E: std::fmt::Display>(
     label: &str,
     operation: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
-    let started = Instant::now();
-    println!("[{}] === START: {label} ===", utc_timestamp());
-    match operation() {
-        Ok(value) => {
-            println!(
-                "[{}] === FINISHED: {label} ({:.2}s) ===",
-                utc_timestamp(),
-                started.elapsed().as_secs_f64()
-            );
-            Ok(value)
-        }
-        Err(error) => {
-            eprintln!(
-                "[{}] === FAILED: {label} after {:.2}s: {error} ===",
-                utc_timestamp(),
-                started.elapsed().as_secs_f64()
-            );
-            Err(error)
-        }
-    }
-}
+    crate::ui::step(label, operation)
 
 fn utc_timestamp() -> String {
     let seconds = match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -42,7 +22,7 @@ fn utc_timestamp() -> String {
     format_utc_timestamp(seconds)
 }
 
-fn format_utc_timestamp(seconds: i64) -> String {
+pub fn format_utc_timestamp(seconds: i64) -> String {
     let days = seconds.div_euclid(86_400);
     let day_seconds = seconds.rem_euclid(86_400);
 
