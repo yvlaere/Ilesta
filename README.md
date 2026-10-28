@@ -43,9 +43,12 @@ export PATH="$PWD/target/release:$PATH"
 
 ## Quick usage
 
+> [!CAUTION]
+>For Ilesta versions earlier than 1.5.0, use `--overhang-ratio 0.2` when running `assemble`. This improves assembly completeness, especially in datasets with lower coverage or shorter reads.
+
 ```bash
 Ilesta assemble \
-  --reads-fq SRR28262566.fastq \
+  --reads-fq reads.fastq \
   --output-dir out_dir \
   --threads 16 \
   --min-read-length 1000 \
@@ -54,20 +57,12 @@ Ilesta assemble \
 
 The read-length and mean-quality filters are optional and read filtering is **disabled by default**. FASTQ input may be plain or gzip-compressed. Ilesta estimates genome size from read overlaps unless `--genome-size` is supplied.
 
-Use `--seed 42` with `assemble` or `alignment-filtering` for reproducible results. Seed `0` uses sorted traversal.
-
 ### Output files
 
 | File | Description |
 | --- | --- |
-| `alignments.paf` | Final all-vs-all read alignments. |
-| `unitigs.overlaps.bin` | Serialized filtered overlaps used to build the graph. |
 | `unitigs.fa` | Final assembled unitigs in FASTA format. |
 | `unitigs.gfa` | Final assembly graph in GFA format. |
-| `assembly_containment.paf` | Alignments used to identify contained unitigs. |
-| `rescue_reads.fq`, `rescue_mapping.paf`, `rescue_graph/` | Rescue-stage files. |
-| `filtered_all.fq` | Filtered read copy when filtering or decompression requires one. |
-| `filtered.fq` | Downsampled primary assembly reads when downsampling is needed. |
 
 
 ## Command Line Usage
@@ -84,7 +79,7 @@ De novo genome assembly for long reads using an overlap graph
 Usage: Ilesta <COMMAND>
 
 Commands:
-  align                Read filtering and alignment
+  align                Read selection and alignment
   alignment-filtering  Alignment filtering
   assemble             Full genome assembly pipeline
   scaffold             Read-guided bridging of an existing contig FASTA
@@ -113,8 +108,9 @@ Output:
   -p, --output-prefix <OUTPUT_PREFIX>  Output prefix [default: unitigs]
   -o, --output-dir <OUTPUT_DIR>        Output directory [default: .]
       --write-dot                      Also write the overlap graph as graph.dot
+      --keep-intermediate              Keep intermediate files (alignments, selected reads, overlaps) in the output directory instead of removing them; by default only the FASTA and GFA remain
 
-Read filtering and alignment:
+Read processing and alignment:
   -r, --reads-fq <READS_FQ>
           Input reads in FASTQ format
       --read-type <READ_TYPE>
@@ -131,8 +127,8 @@ Read filtering and alignment:
           Optional input genome size (if not provided, will be estimated from data)
       --target-coverage <TARGET_COVERAGE>
           Target read coverage for assembly input downsampling [default: 50]
-      --minimap-batch-size <MINIMAP_BATCH_SIZE>
-          Minimap2 query minibatch size for self-alignment (e.g. 500M) [default: 500M]
+      --minimap2-k <MINIMAP_BATCH_SIZE>
+          Override minimap2's -K query minibatch size for self-alignment (e.g. 500M) [default: 500M]
       --minimap2-f <MINIMAP2_F>
           Override minimap2's -f high-frequency minimizer filter
       --minimap2-u <MINIMAP2_U>
@@ -146,7 +142,7 @@ Alignment filtering:
   -i, --min-percent-identity <MIN_PERCENT_IDENTITY>
           Minimum percent identity [default: 5]
       --overhang-ratio <OVERHANG_RATIO>
-          Overhang ratio [default: 0.8]
+          Overhang ratio [default: 0.2]
       --overlaps <OVERLAPS>
           Pre-computed overlaps binary file (optional, if provided skips alignment filtering)
 
@@ -168,7 +164,7 @@ Assembly:
       --no-rescue
           Disable rescue of poorly represented reads (enabled by default)
       --seed <SEED>
-          Optional random seed for reproducible results
+          Seed (the same seed gives the same result) [default: 42]
 
 Scaffolding:
       --scaffold-rounds <ROUNDS>
