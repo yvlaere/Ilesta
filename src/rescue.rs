@@ -60,9 +60,9 @@ pub fn run_rescue_stage(
     crate::utils::run_minimap2(reads.read_type.mapping_args(), reads.threads, assembly_fa, all_reads, &mapping_paf)?;
     let rescue_fq = out_dir.join("rescue_reads.fq");
     let (count, bases) = write_unmapped_reads(all_reads, &rescue_fq, &mapped_read_names(&mapping_paf)?)?;
-    println!("Reads not mapping to the primary assembly: {count} ({bases} bases)");
+    crate::ui::detail(format!("reads not mapping to the primary assembly: {} ({})", crate::ui::count(count as u64), crate::ui::bp(bases as u64)));
     if count == 0 {
-        println!("No poorly represented reads found; skipping rescue assembly.");
+        crate::ui::detail("no poorly represented reads found, nothing to rescue".into());
         return Ok(None);
     }
 
@@ -74,7 +74,7 @@ pub fn run_rescue_stage(
         .map(|l| l.trim().len() as u64)
         .sum();
     let target_coverage = rescue_target_coverage(bases, assembly_len);
-    println!("Rescue assembly target: {target_coverage}x primary assembly length");
+    crate::ui::detail(format!("rescue assembly target: {target_coverage}x primary assembly length"));
     let dir = out_dir.join("rescue_graph");
     std::fs::create_dir_all(&dir)?;
     let rescue_opts = ReadOpts {
