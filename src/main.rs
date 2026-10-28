@@ -308,7 +308,6 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
     report_contigs("contigs", &compressed);
 
     // ---- 4. rescue --------------------------------------------------------
-    let mut rescued_nodes = HashSet::new();
     if args.rescue_enabled() {
         ui::stage("Rescue of poorly represented reads");
         compressed.write_fasta(&draft_path)?;
@@ -327,7 +326,6 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
             std::io::copy(&mut File::open(&reads.primary_reads)?, &mut file)?;
             std::io::copy(&mut File::open(&rescue.reads)?, &mut file)?;
             assembly_reads = combined;
-            rescued_nodes = rescue.node_ids;
             compressed = compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads);
             report_contigs("contigs after rescue", &compressed);
         }
