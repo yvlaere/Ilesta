@@ -12,7 +12,7 @@ Ilesta uses [minimap2](https://github.com/lh3/minimap2) for read alignment. The 
 
 ```bash
 conda create -n ilesta_env -c bioconda ilesta
-conda activate ilesta
+conda activate ilesta_env
 ```
 
 ### Option 2: Precompiled binary
