@@ -84,19 +84,19 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     files.sort();
-    assert_eq!(files, ["unitigs.fa", "unitigs.gfa"]);
-    let unitigs =
-        fs::read_to_string(output_dir.join("unitigs.fa")).expect("read primary assembly FASTA");
+    assert_eq!(files, ["contigs.fa", "contigs.gfa"]);
+    let contigs =
+        fs::read_to_string(output_dir.join("contigs.fa")).expect("read primary assembly FASTA");
     assert!(
-        unitigs.lines().any(|line| line.starts_with(">unitig_")),
-        "assembler completed without producing a unitig"
+        contigs.lines().any(|line| line.starts_with(">contig_")),
+        "assembler completed without producing a contig"
     );
-    let fasta_names: std::collections::HashSet<_> = unitigs
+    let fasta_names: std::collections::HashSet<_> = contigs
         .lines()
         .filter(|line| line.starts_with('>'))
         .filter_map(|line| line[1..].split_whitespace().next())
         .collect();
-    let fasta_topologies: std::collections::HashMap<_, _> = unitigs
+    let fasta_topologies: std::collections::HashMap<_, _> = contigs
         .lines()
         .filter(|line| line.starts_with('>'))
         .filter_map(|line| {
@@ -106,7 +106,7 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
             Some((name, topology))
         })
         .collect();
-    let gfa = fs::read_to_string(output_dir.join("unitigs.gfa")).expect("read combined GFA");
+    let gfa = fs::read_to_string(output_dir.join("contigs.gfa")).expect("read combined GFA");
     let gfa_names: Vec<_> = gfa
         .lines()
         .filter(|line| line.starts_with("S\t"))
@@ -129,17 +129,17 @@ fn assembles_a_sample_from_the_evaluation_dataset() {
             Some(gfa_topology)
         );
     }
-    let rescued_unitig_count = stdout
+    let rescued_contig_count = stdout
         .lines()
         .find_map(|line| {
-            line.split("unitigs containing rescued reads: ")
+            line.split("contigs containing rescued reads: ")
                 .nth(1)
                 .and_then(|rest| rest.trim().parse::<usize>().ok())
         })
-        .expect("rescue unitig count was not reported");
+        .expect("rescue contig count was not reported");
     assert!(
-        rescued_unitig_count > 0,
-        "no rescued unitigs reached the combined assembly"
+        rescued_contig_count > 0,
+        "no rescued contigs reached the combined assembly"
     );
 
     fs::remove_dir_all(temp_dir).expect("remove smoke-test temporary directory");

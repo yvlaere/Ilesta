@@ -1,6 +1,6 @@
 //! Read-guided contig bridging: a second, contig-level assembly round.
 //!
-//! All reads are mapped back to the unitigs and unitigs spanned by reads are joined:
+//! All reads are mapped back to the contigs and contigs spanned by reads are joined:
 //!  * a read only votes for a join if its alignment runs off the end of one contig into
 //!    the start of the next (end-anchored evidence);
 //!  * a contig end followed by two or more well supported partners is a repeat boundary.
@@ -15,7 +15,7 @@
 //! The junctions are polished from all reads by the consensus step that follows.
 
 use crate::cli::{ReadType, ScaffoldOpts};
-use crate::compress_graph::{CompressedGraph, Unitig, UnitigEdge};
+use crate::compress_graph::{CompressedGraph, contig, contigEdge};
 use crate::utils::rev_comp;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
@@ -58,7 +58,7 @@ pub struct Stats {
     pub circularised: usize,
 }
 
-/// An oriented contig (index into the unitig list, reversed). As a "leaving" end it means
+/// An oriented contig (index into the contig list, reversed). As a "leaving" end it means
 /// leaving through the tail of the oriented contig.
 type OEnd = (usize, bool);
 
@@ -696,16 +696,16 @@ fn plan_bridges(
     Ok(plan)
 }
 
-/// Replace merged/dropped unitigs by the scaffolds and remap the graph edges.
+/// Replace merged/dropped contigs by the scaffolds and remap the graph edges.
 fn apply_plan(graph: &mut CompressedGraph, plan: &Plan) {
-    let old = std::mem::take(&mut graph.unitigs);
+    let old = std::mem::take(&mut graph.contigs);
     let ids: Vec<usize> = old.iter().map(|u| u.id).collect();
     let next_id = ids.iter().max().map_or(0, |m| m + 1);
 
-    // (old unitig id, orientation) -> (new unitig id, orientation) for edge ends
+    // (old contig id, orientation) -> (new contig id, orientation) for edge ends
     let mut from_map: BTreeMap<(usize, char), (usize, char)> = BTreeMap::new();
     let mut to_map: BTreeMap<(usize, char), (usize, char)> = BTreeMap::new();
-    let mut unitigs: Vec<Unitig> = old.into_iter().enumerate().filter(|(i, _)| !plan.removed.contains(i)).map(|(_, u)| u).collect();
+    let mut contigs: Vec<contig> = old.into_iter().enumerate().filter(|(i, _)| !plan.removed.contains(i)).map(|(_, u)| u).collect();
     for (si, s) in plan.scaffolds.iter().enumerate() {
         let id = next_id + si;
         let ((c1, r1), (cn, rn)) = (s.parts[0], s.parts[s.parts.len() - 1]);
@@ -715,8 +715,8 @@ fn apply_plan(graph: &mut CompressedGraph, plan: &Plan) {
             to_map.insert((ids[c1], sign(r1)), (id, '+'));
             to_map.insert((ids[cn], sign(!rn)), (id, '-'));
         }
-        // The read tiling of the source unitigs no longer describes the scaffold.
-        unitigs.push(Unitig { id, members: Vec::new(), fasta_seq: Some(s.seq.clone()), topology: if s.circular { 'c' } else { 'l' } });
+        // The read tiling of the source contigs no longer describes the scaffold.
+        contigs.push(contig { id, members: Vec::new(), fasta_seq: Some(s.seq.clone()), topology: if s.circular { 'c' } else { 'l' } });
     }
 
     let removed_ids: BTreeSet<usize> = plan.removed.iter().map(|&i| ids[i]).collect();
@@ -729,14 +729,14 @@ fn apply_plan(graph: &mut CompressedGraph, plan: &Plan) {
     let edges = std::mem::take(&mut graph.edges);
     graph.edges = edges
         .into_iter()
-        .filter_map(|mut e: UnitigEdge| {
+        .filter_map(|mut e: contigEdge| {
             (remap(&mut e.from, &mut e.from_ori, &from_map) && remap(&mut e.to, &mut e.to_ori, &to_map)).then_some(e)
         })
         .collect();
-    graph.unitigs = unitigs;
+    graph.contigs = contigs;
 }
 
-/// Bridge the unitigs of `graph`. Every round re-maps the reads to the contigs of the previous
+/// Bridge the contigs of `graph`. Every round re-maps the reads to the contigs of the previous
 /// round, so scaffolds can be extended further.
 pub fn scaffold_graph(
     graph: &mut CompressedGraph,
@@ -748,11 +748,11 @@ pub fn scaffold_graph(
 ) -> std::io::Result<Stats> {
     let mut total = Stats::default();
     for round in 1..=opts.rounds {
-        if graph.unitigs.is_empty() {
+        if graph.contigs.is_empty() {
             break;
         }
-        let seqs: Vec<String> = graph.unitigs.iter().map(|u| u.fasta_seq.as_deref().unwrap_or("").to_ascii_uppercase()).collect();
-        let circular: Vec<bool> = graph.unitigs.iter().map(|u| u.topology == 'c').collect();
+        let seqs: Vec<String> = graph.contigs.iter().map(|u| u.fasta_seq.as_deref().unwrap_or("").to_ascii_uppercase()).collect();
+        let circular: Vec<bool> = graph.contigs.iter().map(|u| u.topology == 'c').collect();
         let plan = crate::utils::timed_step(
             &format!("Bridge contigs, round {round}/{}", opts.rounds),
             || plan_bridges(&seqs, &circular, reads, work_dir, opts, (threads, read_type)),
@@ -764,7 +764,7 @@ pub fn scaffold_graph(
             break;
         }
         apply_plan(graph, &plan);
-        crate::ui::detail(format!("round {round}: {scaffold_count} scaffolds, {} unitigs remain", graph.unitigs.len()));
+        crate::ui::detail(format!("round {round}: {scaffold_count} scaffolds, {} contigs remain", graph.contigs.len()));
     }
     Ok(total)
 }
@@ -887,12 +887,12 @@ mod tests {
         assert_eq!(k.mirror().inner, vec![(3, false), (2, true)]);
     }
 
-    fn unitig(id: usize) -> Unitig {
-        Unitig { id, members: Vec::new(), fasta_seq: Some("ACGT".repeat(10)), topology: 'l' }
+    fn contig(id: usize) -> contig {
+        contig { id, members: Vec::new(), fasta_seq: Some("ACGT".repeat(10)), topology: 'l' }
     }
 
-    fn uedge(from: usize, from_ori: char, to: usize, to_ori: char) -> UnitigEdge {
-        UnitigEdge { from, to, from_ori, to_ori, edge_len: 10, overlap_len: 5, identity: 1.0 }
+    fn uedge(from: usize, from_ori: char, to: usize, to_ori: char) -> contigEdge {
+        contigEdge { from, to, from_ori, to_ori, edge_len: 10, overlap_len: 5, identity: 1.0 }
     }
 
     #[test]
@@ -900,7 +900,7 @@ mod tests {
         // 0 -> 1 -> 2, a bridge joins 0+ and 1+: edge 1+ -> 2+ must now leave the scaffold and
         // the former edge 0+ -> 1+ disappears.
         let mut g = CompressedGraph {
-            unitigs: vec![unitig(0), unitig(1), unitig(2)],
+            contigs: vec![contig(0), contig(1), contig(2)],
             edges: vec![uedge(0, '+', 1, '+'), uedge(1, '+', 2, '+'), uedge(2, '-', 1, '-'), uedge(1, '-', 0, '-')],
         };
         let plan = Plan {
@@ -909,7 +909,7 @@ mod tests {
             ..Default::default()
         };
         apply_plan(&mut g, &plan);
-        assert_eq!(g.unitigs.iter().map(|u| u.id).collect::<Vec<_>>(), vec![2, 3]);
+        assert_eq!(g.contigs.iter().map(|u| u.id).collect::<Vec<_>>(), vec![2, 3]);
         let e: Vec<_> = g.edges.iter().map(|e| (e.from, e.from_ori, e.to, e.to_ori)).collect();
         assert_eq!(e, vec![(3, '+', 2, '+'), (2, '-', 3, '-')]);
     }

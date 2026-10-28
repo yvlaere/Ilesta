@@ -232,7 +232,7 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
     let polishing = args.consensus_rounds > 0;
     let fasta_path = out_dir.join(format!("{}.fa", args.output_prefix));
     let gfa_path = out_dir.join(format!("{}.gfa", args.output_prefix));
-    // sequence of the current unitigs, used as mapping input between the stages
+    // sequence of the current contigs, used as mapping input between the stages
     let draft_path = work_dir.join(format!("{}.draft.fa", args.output_prefix));
 
     print_header(
@@ -298,14 +298,14 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
     }
 
     let mut assembly_reads = reads.primary_reads.clone();
-    let mut compressed = utils::timed_step("Compress graph into unitigs", || {
-        Ok::<_, Box<dyn Error>>(compress_graph::compress_unitigs(
+    let mut compressed = utils::timed_step("Compress graph into contigs", || {
+        Ok::<_, Box<dyn Error>>(compress_graph::compress_contigs(
             &graph,
             &overlaps,
             &assembly_reads,
         ))
     })?;
-    report_unitigs("unitigs", &compressed);
+    report_contigs("contigs", &compressed);
 
     // ---- 4. rescue --------------------------------------------------------
     let mut rescued_nodes = HashSet::new();
@@ -328,29 +328,29 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
             std::io::copy(&mut File::open(&rescue.reads)?, &mut file)?;
             assembly_reads = combined;
             rescued_nodes = rescue.node_ids;
-            compressed = compress_graph::compress_unitigs(&graph, &overlaps, &assembly_reads);
-            report_unitigs("unitigs after rescue", &compressed);
+            compressed = compress_graph::compress_contigs(&graph, &overlaps, &assembly_reads);
+            report_contigs("contigs after rescue", &compressed);
         }
     }
 
     // ---- 5. refinement ----------------------------------------------------
     ui::stage("Contig refinement");
     compressed.write_fasta(&draft_path)?;
-    let removed = utils::timed_step("Remove contained unitigs", || {
+    let removed = utils::timed_step("Remove contained contigs", || {
         segment_dedup::remove_contained_segments(&mut compressed, &draft_path, work_dir, threads)
     })?;
-    ui::detail(format!("contained unitigs removed: {removed}"));
-    report_unitigs("unitigs after dedup", &compressed);
+    ui::detail(format!("contained contigs removed: {removed}"));
+    report_contigs("contigs after dedup", &compressed);
 
     if args.scaffold.rounds > 0 {
         let stats = scaffold::scaffold_graph(&mut compressed, &assembly_reads, work_dir, &args.scaffold, threads, read_type)?;
-        ui::detail(format!("bridges applied: {} · unitigs circularised: {}", stats.accepted, stats.circularised));
-        report_unitigs("unitigs after bridging", &compressed);
+        ui::detail(format!("bridges applied: {} · contigs circularised: {}", stats.accepted, stats.circularised));
+        report_contigs("contigs after bridging", &compressed);
     }
-    let circularised = utils::timed_step("Circularise unitigs with overlapping ends", || {
+    let circularised = utils::timed_step("Circularise contigs with overlapping ends", || {
         circularise::circularise_self_overlaps(&mut compressed, work_dir, threads)
     })?;
-    ui::detail(format!("unitigs circularised by overlapping ends: {circularised}"));
+    ui::detail(format!("contigs circularised by overlapping ends: {circularised}"));
 
     // ---- 6. consensus -----------------------------------------------------
     if polishing {
@@ -374,27 +374,27 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
         ));
 
         // Second pass on polished sequences: copies that were too diverged to be recognised in
-        // the raw unitigs (and those created by bridging) align cleanly now.
+        // the raw contigs (and those created by bridging) align cleanly now.
         compressed.write_fasta(&draft_path)?;
-        let removed = utils::timed_step("Remove contained unitigs (polished)", || {
+        let removed = utils::timed_step("Remove contained contigs (polished)", || {
             segment_dedup::remove_contained_segments(&mut compressed, &draft_path, work_dir, threads)
         })?;
-        ui::detail(format!("contained unitigs removed after polishing: {removed}"));
+        ui::detail(format!("contained contigs removed after polishing: {removed}"));
     }
 
     // ---- 7. output --------------------------------------------------------
     ui::stage("Output");
-    // The `a` lines of the GFA place reads on the unitig sequence. Polishing changes that
+    // The `a` lines of the GFA place reads on the contig sequence. Polishing changes that
     // sequence, so they are only written when it is off.
     compressed.write_fasta(&fasta_path)?;
     compressed.write_gfa(gfa_path.to_str().ok_or("invalid output path")?, !polishing)?;
     if !rescued_nodes.is_empty() {
         let rescued = compressed
-            .unitigs
+            .contigs
             .iter()
             .filter(|u| u.members.iter().any(|m| rescued_nodes.contains(&m.node_id)))
             .count();
-        ui::detail(format!("unitigs containing rescued reads: {rescued}"));
+        ui::detail(format!("contigs containing rescued reads: {rescued}"));
     }
     ui::detail(format!("wrote {} and {}", fasta_path.display(), gfa_path.display()));
     if assembly_reads != reads.primary_reads {
@@ -405,10 +405,10 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
     Ok(())
 }
 
-/// One-line unitig overview for a stage: count, total length and the largest unitigs.
-fn report_unitigs(stage: &str, graph: &compress_graph::CompressedGraph) {
+/// One-line contig overview for a stage: count, total length and the largest contigs.
+fn report_contigs(stage: &str, graph: &compress_graph::CompressedGraph) {
     let mut lens: Vec<(usize, usize, char)> = graph
-        .unitigs
+        .contigs
         .iter()
         .map(|u| (u.fasta_seq.as_ref().map_or(0, String::len), u.id, u.topology))
         .collect();
@@ -426,8 +426,8 @@ fn report_unitigs(stage: &str, graph: &compress_graph::CompressedGraph) {
 /// Final overview: totals and one line per contig.
 fn print_assembly_summary(graph: &compress_graph::CompressedGraph) {
     ui::banner("Assembly");
-    let mut contigs: Vec<(usize, &compress_graph::Unitig)> = graph
-        .unitigs
+    let mut contigs: Vec<(usize, &compress_graph::contig)> = graph
+        .contigs
         .iter()
         .map(|u| (u.fasta_seq.as_ref().map_or(0, String::len), u))
         .collect();
@@ -445,13 +445,13 @@ fn print_assembly_summary(graph: &compress_graph::CompressedGraph) {
         ui::bp(ui::n50(contigs.iter().map(|c| c.0 as u64))),
         ui::bp(contigs.first().map_or(0, |c| c.0 as u64))
     ));
-    for (len, unitig) in contigs.iter().take(10) {
+    for (len, contig) in contigs.iter().take(10) {
         ui::detail(format!(
-            "unitig_{:<5}{:>12}  {:<9}GC {:.1}%",
-            unitig.id,
+            "contig_{:<5}{:>12}  {:<9}GC {:.1}%",
+            contig.id,
             ui::count(*len as u64),
-            if unitig.topology == 'c' { "circular" } else { "linear" },
-            gc(unitig.fasta_seq.as_deref().unwrap_or(""))
+            if contig.topology == 'c' { "circular" } else { "linear" },
+            gc(contig.fasta_seq.as_deref().unwrap_or(""))
         ));
     }
     if contigs.len() > 10 {
@@ -494,8 +494,8 @@ mod tests {
             .join(format!("seeded_reproducibility_{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let fastq_path = directory.join("reads.fq");
-        let fasta_path = directory.join("unitigs.fa");
-        let gfa_path = directory.join("unitigs.gfa");
+        let fasta_path = directory.join("contigs.fa");
+        let gfa_path = directory.join("contigs.gfa");
         let dot_path = directory.join("graph.dot");
         let overlaps_path = directory.join("overlaps.bin");
         let fastq: String = (0..6)
@@ -545,7 +545,7 @@ mod tests {
                 heuristic_simplification::remove_short_edges(&mut graph, 0.8);
                 bubble_removal::remove_bubbles(&mut graph, 100, 1.1);
                 graph.write_dot(&dot_path).unwrap();
-                let compressed = compress_graph::compress_unitigs(&graph, &overlaps, &fastq_path);
+                let compressed = compress_graph::compress_contigs(&graph, &overlaps, &fastq_path);
                 compressed.write_fasta(&fasta_path).unwrap();
                 assert!(compressed.edges.len() >= 2);
                 compressed.write_gfa(gfa_path.to_str().unwrap(), true).unwrap();
