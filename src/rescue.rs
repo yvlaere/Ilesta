@@ -57,7 +57,15 @@ pub fn run_rescue_stage(
     overlaps: &mut HashMap<(usize, usize), Overlap>,
 ) -> Result<Option<RescueResult>, Box<dyn std::error::Error>> {
     let mapping_paf = out_dir.join("rescue_mapping.paf");
-    crate::utils::run_minimap2(reads.read_type.mapping_args(), reads.threads, assembly_fa, all_reads, &mapping_paf)?;
+    crate::utils::timed_step("Map reads to primary assembly", || {
+        crate::utils::run_minimap2(
+            reads.read_type.mapping_args(),
+            reads.threads,
+            assembly_fa,
+            all_reads,
+            &mapping_paf,
+        )
+    })?;
     let rescue_fq = out_dir.join("rescue_reads.fq");
     let (count, bases) = write_unmapped_reads(all_reads, &rescue_fq, &mapped_read_names(&mapping_paf)?)?;
     crate::ui::detail(format!("reads not mapping to the primary assembly: {} ({})", crate::ui::count(count as u64), crate::ui::bp(bases as u64)));
@@ -66,15 +74,12 @@ pub fn run_rescue_stage(
         return Ok(None);
     }
 
-    // assemble the unmapped reads with a coverage budget that includes all of them
     let assembly_len: u64 = BufReader::new(File::open(assembly_fa)?)
         .lines()
         .map_while(Result::ok)
         .filter(|l| !l.starts_with('>'))
         .map(|l| l.trim().len() as u64)
         .sum();
-    let target_coverage = rescue_target_coverage(bases, assembly_len);
-    crate::ui::detail(format!("rescue assembly target: {target_coverage}x primary assembly length"));
     let dir = out_dir.join("rescue_graph");
     std::fs::create_dir_all(&dir)?;
     let rescue_opts = ReadOpts {
@@ -83,15 +88,28 @@ pub fn run_rescue_stage(
         paf: "rescue.paf".into(),
         min_read_length: reads.min_read_length.saturating_sub(1).clamp(1, 500),
         genome_size: Some(assembly_len.clamp(1, u32::MAX as u64) as u32),
-        target_coverage,
         minimap2_f: Some("0.001".into()),
         minimap2_K: reads.minimap2_K.clone(),
         minimap2_U: reads.minimap2_U.clone(),
         ..reads.clone()
     };
-    let rescued = crate::align_reads::align_reads(&rescue_opts, &dir)?;
-    let rescue_overlaps = crate::alignment_filtering::run_alignment_filtering(&dir.join("rescue.paf"), overlap)?.overlaps;
-    let rescue_graph = crate::create_overlap_graph::run_create_overlap_graph(&rescue_overlaps)?;
+    let (rescued, rescue_overlaps, rescue_graph) =
+        crate::utils::timed_step("Assemble rescue reads", || {
+            let rescued = crate::align_reads::align_reads(
+                &rescue_opts,
+                &dir,
+                crate::align_reads::ReadSelection::AllReads,
+            )?;
+            let rescue_overlaps = crate::alignment_filtering::run_alignment_filtering(
+                &dir.join("rescue.paf"),
+                overlap,
+                false,
+            )?
+            .overlaps;
+            let rescue_graph =
+                crate::create_overlap_graph::run_create_overlap_graph(&rescue_overlaps)?;
+            Ok::<_, Box<dyn std::error::Error>>((rescued, rescue_overlaps, rescue_graph))
+        })?;
 
     // merge: overlap keys are shifted so that they cannot collide with the main ones
     let key_offset = overlaps.keys().flat_map(|&(q, t)| [q, t]).max().map_or(0, |m| m + 1);
@@ -106,14 +124,6 @@ pub fn run_rescue_stage(
         }
     }
     Ok(Some(RescueResult { reads: rescued.primary_reads, node_ids }))
-}
-
-/// Coverage (x the primary assembly length) needed to include all rescued bases.
-fn rescue_target_coverage(rescued_bases: u64, assembly_len: u64) -> u32 {
-    if assembly_len == 0 {
-        return u32::MAX;
-    }
-    rescued_bases.div_ceil(assembly_len).clamp(1, u32::MAX as u64) as u32
 }
 
 #[cfg(test)]
@@ -137,12 +147,5 @@ mod tests {
         let result = std::fs::read_to_string(output).unwrap();
         assert!(result.contains("@unmapped") && !result.contains("@mapped"));
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn rescue_coverage_budget_includes_all_rescued_bases() {
-        assert_eq!(rescue_target_coverage(381_937_170, 4_787_666), 80);
-        assert_eq!(rescue_target_coverage(20_000_000, 4_787_415), 5);
-        assert_eq!(rescue_target_coverage(100, 0), u32::MAX);
     }
 }

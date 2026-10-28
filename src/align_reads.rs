@@ -21,6 +21,12 @@ pub struct AlignReadsResult {
     pub filtered_reads: PathBuf,
 }
 
+#[derive(Clone, Copy)]
+pub enum ReadSelection {
+    TargetCoverage,
+    AllReads,
+}
+
 /// Write reads that pass the length and quality filters; returns (name, length) per kept read.
 fn filter_fastq(
     input: &Path,
@@ -190,7 +196,11 @@ fn prepare_reads(opts: &ReadOpts, out_dir: &Path) -> std::io::Result<(PathBuf, V
     Ok((filtered_all, reads))
 }
 
-pub fn align_reads(opts: &ReadOpts, out_dir: &Path) -> std::io::Result<AlignReadsResult> {
+pub fn align_reads(
+    opts: &ReadOpts,
+    out_dir: &Path,
+    selection: ReadSelection,
+) -> std::io::Result<AlignReadsResult> {
     let paf = out_dir.join(&opts.paf);
     // Length and quality filtering is off by default; the step is then just a scan.
     let step = if opts.min_read_length > 0 || opts.min_base_quality > 0.0 {
@@ -249,22 +259,38 @@ pub fn align_reads(opts: &ReadOpts, out_dir: &Path) -> std::io::Result<AlignRead
         if opts.genome_size.is_some() { "provided" } else { "estimated" }
     ));
 
-    let target_bases = genome_size.saturating_mul(opts.target_coverage as u64);
-    let (primary, primary_read_count, primary_bases) = crate::utils::timed_step(
-        "Select reads and align them",
-        || -> std::io::Result<(PathBuf, usize, u64)> {
-            if aligned_all && target_bases >= total_bases {
+    let (primary, primary_read_count, primary_bases) = match selection {
+        ReadSelection::AllReads => crate::utils::timed_step(
+            "Align all reads",
+            || -> std::io::Result<(PathBuf, usize, u64)> {
+                align_all_vs_all(&filtered_all, &paf, opts)?;
                 Ok((filtered_all.clone(), reads.len(), total_bases))
-            } else {
-                let primary = out_dir.join("filtered.fq");
-                let (bases, n) = subsample_fastq(&filtered_all, &primary, &reads, target_bases)?;
-                align_all_vs_all(&primary, &paf, opts)?;
-                Ok((primary, n, bases))
-            }
-        },
-    )?;
+            },
+        )?,
+        ReadSelection::TargetCoverage => {
+            let target_bases = genome_size.saturating_mul(opts.target_coverage as u64);
+            crate::utils::timed_step(
+                "Select reads and align them",
+                || -> std::io::Result<(PathBuf, usize, u64)> {
+                    if aligned_all && target_bases >= total_bases {
+                        Ok((filtered_all.clone(), reads.len(), total_bases))
+                    } else {
+                        let primary = out_dir.join("filtered.fq");
+                        let (bases, n) = subsample_fastq(&filtered_all, &primary, &reads, target_bases)?;
+                        align_all_vs_all(&primary, &paf, opts)?;
+                        Ok((primary, n, bases))
+                    }
+                },
+            )?
+        }
+    };
     ui::detail(format!(
-        "selected {} reads · {} · {:.0}x of the genome",
+        "{} {} reads · {} · {:.0}x of the genome",
+        if matches!(selection, ReadSelection::AllReads) {
+            "using"
+        } else {
+            "selected"
+        },
         ui::count(primary_read_count as u64),
         ui::bp(primary_bases),
         primary_bases as f64 / genome_size.max(1) as f64

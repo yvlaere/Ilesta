@@ -34,7 +34,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             print_header("Align", &[("reads", args.reads.reads_fq.clone()), ("output", args.output_dir.clone())]);
             ui::plan(1);
             ui::stage("Read processing and alignment");
-            align_reads::align_reads(&args.reads, out_dir)?;
+            align_reads::align_reads(
+                &args.reads,
+                out_dir,
+                align_reads::ReadSelection::TargetCoverage,
+            )?;
             print_footer();
         }
         Commands::AlignmentFiltering(args) => {
@@ -45,7 +49,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             ui::plan(1);
             ui::stage("Overlap filtering");
             utils::timed_step("Filter alignments and write overlaps", || {
-                let out = alignment_filtering::run_alignment_filtering(&out_dir.join(&args.paf), &args.overlap)?;
+                let out = alignment_filtering::run_alignment_filtering(
+                    &out_dir.join(&args.paf),
+                    &args.overlap,
+                    true,
+                )?;
                 out.serialize_overlaps(&args.output_overlaps)?;
                 ui::detail(format!("wrote {} overlaps to {}", ui::count(out.overlaps.len() as u64), args.output_overlaps));
                 Ok::<_, Box<dyn Error>>(())
@@ -242,7 +250,11 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
 
     // ---- 1. reads ---------------------------------------------------------
     ui::stage("Read processing and alignment");
-    let reads = align_reads::align_reads(&args.reads, work_dir)?;
+    let reads = align_reads::align_reads(
+        &args.reads,
+        work_dir,
+        align_reads::ReadSelection::TargetCoverage,
+    )?;
 
     // ---- 2. overlaps: provided, or filtered from the alignments ------------
     ui::stage("Overlap filtering");
@@ -257,6 +269,7 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
                 let out = alignment_filtering::run_alignment_filtering(
                     &work_dir.join(&args.reads.paf),
                     &args.overlap,
+                    true,
                 )?;
                 out.serialize_overlaps(path.to_str().ok_or("invalid output path")?)?;
                 Ok::<_, Box<dyn Error>>(())
