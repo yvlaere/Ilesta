@@ -132,7 +132,7 @@ Read processing and alignment:
       --minimap2-f <MINIMAP2_F>
           Override minimap2's -f high-frequency minimizer filter
       --minimap2-u <MINIMAP2_U>
-          Override minimap2's -U minimizer occurrence bounds
+          Override minimap2's -U minimizer occurrence bounds [default: 10,5000]
 
 Alignment filtering:
   -l, --min-overlap-length <MIN_OVERLAP_LENGTH>
