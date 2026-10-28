@@ -20,7 +20,7 @@ conda activate ilesta
 ```bash
 mkdir Ilesta
 cd Ilesta
-wget https://github.com/yvlaere/Ilesta/releases/download/v1.4.0/ilesta-linux-x86_64
+wget https://github.com/yvlaere/Ilesta/releases/download/v1.5.0/ilesta-linux-x86_64
 chmod +x ilesta-linux-x86_64
 mv ilesta-linux-x86_64 Ilesta
 
