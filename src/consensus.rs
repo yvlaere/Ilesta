@@ -119,10 +119,12 @@ pub fn polish_graph(
         stats.windows_total = round_stats.windows_total;
         stats.windows_changed += round_stats.windows_changed;
         stats.windows_unsupported = round_stats.windows_unsupported;
-        println!(
-            "Consensus windows: {} total, {} changed, {} without enough support",
-            round_stats.windows_total, round_stats.windows_changed, round_stats.windows_unsupported
-        );
+        crate::ui::detail(format!(
+            "round {round}: {} of {} windows changed, {} without enough read support",
+            crate::ui::count(round_stats.windows_changed as u64),
+            crate::ui::count(round_stats.windows_total as u64),
+            crate::ui::count(round_stats.windows_unsupported as u64)
+        ));
         if round_stats.windows_changed == 0 {
             break; // converged
         }
