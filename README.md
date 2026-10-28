@@ -61,8 +61,8 @@ The read-length and mean-quality filters are optional and read filtering is **di
 
 | File | Description |
 | --- | --- |
-| `unitigs.fa` | Final assembled unitigs in FASTA format. |
-| `unitigs.gfa` | Final assembly graph in GFA format. |
+| `contigs.fa` | Final assembled contigs in FASTA format. |
+| `contigs.gfa` | Final assembly graph in GFA format. |
 
 
 ## Command Line Usage
@@ -105,7 +105,7 @@ Options:
   -h, --help  Print help
 
 Output:
-  -p, --output-prefix <OUTPUT_PREFIX>  Output prefix [default: unitigs]
+  -p, --output-prefix <OUTPUT_PREFIX> Output prefix [default: contigs]
   -o, --output-dir <OUTPUT_DIR>        Output directory [default: .]
       --write-dot                      Also write the overlap graph as graph.dot
       --keep-intermediate              Keep intermediate files (alignments, selected reads, overlaps) in the output directory instead of removing them; by default only the FASTA and GFA remain
@@ -168,7 +168,7 @@ Assembly:
 
 Scaffolding:
       --scaffold-rounds <ROUNDS>
-          Contig bridging rounds (read-guided scaffolding of the final unitigs; 0 disables) [default: 2]
+          Contig bridging rounds (read-guided scaffolding of the final contigs; 0 disables) [default: 2]
       --scaffold-min-reads <MIN_READS>
           Minimum number of reads spanning a bridge between two contigs [default: 3]
       --scaffold-dominance <DOMINANCE>
@@ -180,7 +180,7 @@ Scaffolding:
 
 Consensus:
       --consensus-rounds <CONSENSUS_ROUNDS>
-          Consensus polishing rounds on the final unitigs (0 disables) [default: 2]
+          Consensus polishing rounds on the final contigs (0 disables) [default: 2]
       --consensus-window-len <CONSENSUS_WINDOW_LEN>
           Window length (bp) for consensus calling [default: 500]
       --consensus-min-depth <CONSENSUS_MIN_DEPTH>

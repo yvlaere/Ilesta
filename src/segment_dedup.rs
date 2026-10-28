@@ -5,19 +5,19 @@ use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 
 /// Minimum fraction of matching bases (matches / alignment block) of an alignment that counts as
-/// containment. This is measured on base-level alignments (`-c`) of unitigs that are still
+/// containment. This is measured on base-level alignments (`-c`) of contigs that are still
 /// unpolished, so two copies of the same sequence typically agree on ~90-95% of the bases.
 const MIN_IDENTITY: f64 = 0.75;
 /// Minimum fraction of the query that needs to be covered
 const MIN_QUERY_COVERAGE: f64 = 0.90;
-/// minimap2 options of the all-vs-all unitig alignment. `-c` is essential: without it minimap2
+/// minimap2 options of the all-vs-all contig alignment. `-c` is essential: without it minimap2
 /// reports the matches of the seed chain (a small fraction of the bases at ONT error rates)
 const MINIMAP2_ARGS: &[&str] = &["-x", "asm20", "-DP", "-c"];
-/// Removed unitigs of at least this length are reported (replicons, not rescue fragments).
+/// Removed contigs of at least this length are reported (replicons, not rescue fragments).
 const REPORT_MIN_LEN: u64 = 20_000;
 
-/// Remove unitigs that are (>95%) contained in a longer one. `fasta` holds the current unitigs
-/// and is only used as mapping input. Returns the number of removed unitigs.
+/// Remove contigs that are (>95%) contained in a longer one. `fasta` holds the current contigs
+/// and is only used as mapping input. Returns the number of removed contigs.
 pub fn remove_contained_segments(
     assembly: &mut CompressedGraph,
     fasta: &Path,
@@ -97,7 +97,7 @@ fn contained_unitig_ids(reader: impl BufRead) -> io::Result<HashSet<usize>> {
         }
 
         if let Some(id) = query_name
-            .strip_prefix("unitig_")
+            .strip_prefix("contig_")
             .and_then(|name| name.parse().ok())
         {
             contained.insert(id);
@@ -153,15 +153,15 @@ mod tests {
     #[test]
     fn removes_only_shorter_segments_passing_query_coverage_threshold() {
         let paf = concat!(
-            "unitig_1\t100\t0\t96\t+\tunitig_2\t200\t20\t116\t96\t96\t60\n",
-            "unitig_3\t100\t0\t95\t+\tunitig_4\t200\t20\t115\t95\t95\t60\n",
-            "unitig_5\t100\t0\t99\t+\tunitig_6\t200\t20\t119\t99\t100\t60\n",
-            "unitig_7\t200\t0\t198\t+\tunitig_8\t100\t0\t98\t198\t198\t60\n",
-            "unitig_9\t100\t0\t99\t+\tunitig_9\t100\t0\t99\t99\t99\t60\n",
-            "unitig_10\t100\t0\t99\t+\tunitig_11\t100\t0\t99\t99\t99\t60\n",
-            "unitig_11\t100\t0\t99\t+\tunitig_10\t100\t0\t99\t99\t99\t60\n",
+            "contig_1\t100\t0\t96\t+\tcontig_2\t200\t20\t116\t96\t96\t60\n",
+            "contig_3\t100\t0\t95\t+\tcontig_4\t200\t20\t115\t95\t95\t60\n",
+            "contig_5\t100\t0\t99\t+\tcontig_6\t200\t20\t119\t99\t100\t60\n",
+            "contig_7\t200\t0\t198\t+\tcontig_8\t100\t0\t98\t198\t198\t60\n",
+            "contig_9\t100\t0\t99\t+\tcontig_9\t100\t0\t99\t99\t99\t60\n",
+            "contig_10\t100\t0\t99\t+\tcontig_11\t100\t0\t99\t99\t99\t60\n",
+            "contig_11\t100\t0\t99\t+\tcontig_10\t100\t0\t99\t99\t99\t60\n",
             // loose chain between repeat copies: 99% of the query is spanned, 2% of it matches
-            "unitig_12\t100\t0\t99\t+\tunitig_13\t200\t20\t119\t2\t99\t0\n",
+            "contig_12\t100\t0\t99\t+\tcontig_13\t200\t20\t119\t2\t99\t0\n",
         );
 
         let contained = contained_unitig_ids(Cursor::new(paf)).unwrap();
@@ -172,10 +172,10 @@ mod tests {
     #[test]
     fn combines_non_overlapping_query_alignments_but_not_different_targets() {
         let paf = concat!(
-            "unitig_20\t100\t0\t50\t+\tunitig_21\t200\t0\t50\t50\t50\t60\n",
-            "unitig_20\t100\t50\t100\t-\tunitig_21\t200\t50\t100\t50\t50\t60\n",
-            "unitig_22\t100\t0\t50\t+\tunitig_23\t200\t0\t50\t50\t50\t60\n",
-            "unitig_22\t100\t50\t100\t+\tunitig_24\t200\t0\t50\t50\t50\t60\n",
+            "contig_20\t100\t0\t50\t+\tcontig_21\t200\t0\t50\t50\t50\t60\n",
+            "contig_20\t100\t50\t100\t-\tcontig_21\t200\t50\t100\t50\t50\t60\n",
+            "contig_22\t100\t0\t50\t+\tcontig_23\t200\t0\t50\t50\t50\t60\n",
+            "contig_22\t100\t50\t100\t+\tcontig_24\t200\t0\t50\t50\t50\t60\n",
         );
 
         let contained = contained_unitig_ids(Cursor::new(paf)).unwrap();
@@ -184,12 +184,12 @@ mod tests {
     }
 }
 
-    /// A 6 kb copy of a longer unitig with ~4% substitutions and indels (what two unpolished
-    /// unitigs of the same region look like) must be recognised as contained; an unrelated
-    /// unitig must not.
+    /// A 6 kb copy of a longer contig with ~4% substitutions and indels (what two unpolished
+    /// contigs of the same region look like) must be recognised as contained; an unrelated
+    /// contig must not.
     #[test]
     #[ignore = "requires minimap2 on PATH"]
-    fn removes_a_diverged_copy_but_not_an_unrelated_unitig() {
+    fn removes_a_diverged_copy_but_not_an_unrelated_contig() {
         let mut state = 12345u64;
         let mut next = move || {
             state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -215,7 +215,7 @@ mod tests {
         let fasta = dir.join("contigs.fa");
         let mut text = String::new();
         for (i, seq) in [&big, &copy, &other].iter().enumerate() {
-            text += &format!(">unitig_{i} topology=l\n{}\n", String::from_utf8_lossy(seq));
+            text += &format!(">contig_{i} topology=l\n{}\n", String::from_utf8_lossy(seq));
         }
         std::fs::write(&fasta, text).unwrap();
         let mut graph = crate::compress_graph::CompressedGraph::from_fasta(&fasta).unwrap();

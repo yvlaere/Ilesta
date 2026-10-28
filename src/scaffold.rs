@@ -1,6 +1,6 @@
 //! Read-guided contig bridging: a second, contig-level assembly round.
 //!
-//! All reads are mapped back to the unitigs and unitigs spanned by reads are joined:
+//! All reads are mapped back to the contigs and contigs spanned by reads are joined:
 //!  * a read only votes for a join if its alignment runs off the end of one contig into
 //!    the start of the next (end-anchored evidence);
 //!  * a contig end followed by two or more well supported partners is a repeat boundary.
@@ -58,7 +58,7 @@ pub struct Stats {
     pub circularised: usize,
 }
 
-/// An oriented contig (index into the unitig list, reversed). As a "leaving" end it means
+/// An oriented contig (index into the contig list, reversed). As a "leaving" end it means
 /// leaving through the tail of the oriented contig.
 type OEnd = (usize, bool);
 
@@ -696,13 +696,13 @@ fn plan_bridges(
     Ok(plan)
 }
 
-/// Replace merged/dropped unitigs by the scaffolds and remap the graph edges.
+/// Replace merged/dropped contigs by the scaffolds and remap the graph edges.
 fn apply_plan(graph: &mut CompressedGraph, plan: &Plan) {
     let old = std::mem::take(&mut graph.unitigs);
     let ids: Vec<usize> = old.iter().map(|u| u.id).collect();
     let next_id = ids.iter().max().map_or(0, |m| m + 1);
 
-    // (old unitig id, orientation) -> (new unitig id, orientation) for edge ends
+    // (old contig id, orientation) -> (new contig id, orientation) for edge ends
     let mut from_map: BTreeMap<(usize, char), (usize, char)> = BTreeMap::new();
     let mut to_map: BTreeMap<(usize, char), (usize, char)> = BTreeMap::new();
     let mut unitigs: Vec<Unitig> = old.into_iter().enumerate().filter(|(i, _)| !plan.removed.contains(i)).map(|(_, u)| u).collect();
@@ -715,7 +715,7 @@ fn apply_plan(graph: &mut CompressedGraph, plan: &Plan) {
             to_map.insert((ids[c1], sign(r1)), (id, '+'));
             to_map.insert((ids[cn], sign(!rn)), (id, '-'));
         }
-        // The read tiling of the source unitigs no longer describes the scaffold.
+        // The read tiling of the source contigs no longer describes the scaffold.
         unitigs.push(Unitig { id, members: Vec::new(), fasta_seq: Some(s.seq.clone()), topology: if s.circular { 'c' } else { 'l' } });
     }
 
@@ -736,7 +736,7 @@ fn apply_plan(graph: &mut CompressedGraph, plan: &Plan) {
     graph.unitigs = unitigs;
 }
 
-/// Bridge the unitigs of `graph`. Every round re-maps the reads to the contigs of the previous
+/// Bridge the contigs of `graph`. Every round re-maps the reads to the contigs of the previous
 /// round, so scaffolds can be extended further.
 pub fn scaffold_graph(
     graph: &mut CompressedGraph,
@@ -764,7 +764,7 @@ pub fn scaffold_graph(
             break;
         }
         apply_plan(graph, &plan);
-        crate::ui::detail(format!("round {round}: {scaffold_count} scaffolds, {} unitigs remain", graph.unitigs.len()));
+        crate::ui::detail(format!("round {round}: {scaffold_count} scaffolds, {} contigs remain", graph.unitigs.len()));
     }
     Ok(total)
 }

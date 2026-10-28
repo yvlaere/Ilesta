@@ -2,10 +2,10 @@ use crate::alignment_filtering::Overlap;
 use crate::create_overlap_graph::OverlapGraph;
 use crate::utils;
 /// graph compression module
-/// creates a compressed graph of unitigs from an overlap graph
+/// creates a compressed graph of contigs from an overlap graph
 /// 1. get the indegree and outdegree of each node
-/// 2. get non-circular unitigs (start at nodes with indegree != 1 or outdegree != 1)
-/// 3. get circular unitigs (remaining unvisited nodes)
+/// 2. get non-circular contigs (start at nodes with indegree != 1 or outdegree != 1)
+/// 3. get circular contigs (remaining unvisited nodes)
 use std::collections::{HashMap, HashSet};
 
 pub struct UnitigMember {
@@ -37,13 +37,13 @@ pub struct CompressedGraph {
 }
 
 impl CompressedGraph {
-    /// Write all unitig sequences as FASTA.
+    /// Write all contig sequences as FASTA.
     pub fn write_fasta(&self, path: &std::path::Path) -> std::io::Result<()> {
         use std::io::Write;
         let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
         for u in &self.unitigs {
             let seq = u.fasta_seq.as_deref().unwrap_or("");
-            writeln!(out, ">unitig_{} len={}bp topology={}\n{seq}", u.id, seq.len(), u.topology)?;
+            writeln!(out, ">contig_{} len={}bp topology={}\n{seq}", u.id, seq.len(), u.topology)?;
         }
         out.flush()
     }
@@ -71,15 +71,15 @@ impl CompressedGraph {
 
         // segments
         for u in &self.unitigs {
-            let sid = format!("unitig_{}_{}", u.id, u.topology);
+            let sid = format!("contig_{}_{}", u.id, u.topology);
             let seq = u.fasta_seq.as_deref().unwrap_or("*");
             writeln!(file, "S\t{}\t{}", sid, seq)?;
         }
 
-        // Add circularising links for unitigs that are circular (first member's node_id == last member's edge.0)
+        // Add circularising links for contigs that are circular (first member's node_id == last member's edge.0)
         for u in &self.unitigs {
             if u.topology == 'c' {
-                let from = format!("unitig_{}_{}", u.id, u.topology);
+                let from = format!("contig_{}_{}", u.id, u.topology);
                 let to = from.clone();
                 let cigar = format!("{}M", 0);
                 writeln!(file, "L\t{}\t+\t{}\t+\t{}", from, to, cigar)?;
@@ -90,19 +90,19 @@ impl CompressedGraph {
         // other links
         let mut edge_set = std::collections::HashSet::new();
         for e in &self.edges {
-            // get from unitig
+            // get from contig
             let from_utg = self
                 .unitigs
                 .iter()
                 .find(|u| u.id == e.from)
-                .ok_or("invalid edge: from unitig not found")?;
+                .ok_or("invalid edge: from contig not found")?;
             let to_utg = self
                 .unitigs
                 .iter()
                 .find(|u| u.id == e.to)
-                .ok_or("invalid edge: to unitig not found")?;
-            let from = format!("unitig_{}_{}", e.from, from_utg.topology);
-            let to = format!("unitig_{}_{}", e.to, to_utg.topology);
+                .ok_or("invalid edge: to contig not found")?;
+            let from = format!("contig_{}_{}", e.from, from_utg.topology);
+            let to = format!("contig_{}_{}", e.to, to_utg.topology);
             let cigar = format!("{}M", e.overlap_len);
             writeln!(
                 file,
@@ -112,15 +112,15 @@ impl CompressedGraph {
             edge_set.insert((e.from, e.to));
         }
 
-        // 'a' lines: annotate which reads were used to create each unitig
+        // 'a' lines: annotate which reads were used to create each contig
         for u in self.unitigs.iter().filter(|_| read_lines) {
-            let utg_name = format!("unitig_{}_{}", u.id, u.topology);
+            let utg_name = format!("contig_{}_{}", u.id, u.topology);
             let mut utg_pos: u32 = 0;
 
             for m in &u.members {
-                // Each member contributes the part of its read up to the next member, like
-                // `unitig_sequence`; only the last member of a linear unitig (no target) contributes
-                // its whole slice. The last member of a circular unitig points back to the first one.
+                // Each member contributes the part of its read up to the next member; only the
+                // last member of a linear contig (no target) contributes its whole slice. The
+                // last member of a circular contig points back to the first one.
                 let contrib_len = if m.edge.0.is_empty() {
                     let (_read_name, read_start, read_end, _ori) =
                         parse_node_id(&m.node_id).map_err(|e| format!("a-line error: {}", e))?;
@@ -213,7 +213,7 @@ fn parse_node_id(node_id: &str) -> Result<(&str, u32, u32, char), String> {
     Ok((read_name, start, end, ori))
 }
 
-/// Main function: compress maximal non-branching paths into unitigs.
+/// Main function: compress maximal non-branching paths into contigs.
 /// Preserves member lists and the overlap lengths between them.
 pub fn compress_unitigs(
     graph: &OverlapGraph,
@@ -246,7 +246,7 @@ pub fn compress_unitigs(
         })
     };
 
-    // 2) non-circular unitigs, start unitigs at nodes where indegree != 1 || outdeg != 1
+    // 2) non-circular contigs, start contigs at nodes where indegree != 1 || outdeg != 1
     let node_ids = crate::utils::order_keys(graph.nodes.keys().cloned());
     for id in &node_ids {
         let node = &graph.nodes[id];
@@ -258,15 +258,14 @@ pub fn compress_unitigs(
             continue;
         }
 
-        // start a unitig if indegree != 1 or outdegree != 1 (i.e., not a simple internal node)
+        // start a contig if indegree != 1 or outdegree != 1 (i.e., not a simple internal node)
         if indegree_i != 1 || outdeg_i != 1 {
-            // create a unitig for each outgoing edge
-            // if outdeg == 0, there will be no unitig, each outgoing edge will be zero-indexed
+            // create a contig for each outgoing edge
+            // if outdeg == 0, there will be no contig, each outgoing edge will be zero-indexed
             for out_edge_i in 0..outdeg_i {
-                // start a new unitig from id
+                // start a new contig from id
                 let mut members: Vec<UnitigMember> = Vec::new();
                 let mut cur = id.clone();
-                //members.push(UnitigMember { node_id: cur.clone(), overlap_from_prev: 0 });
                 visited.insert(cur.clone());
 
                 // check the next outgoing edge
@@ -274,7 +273,7 @@ pub fn compress_unitigs(
                     let e = &node.edges[out_edge_i];
                     (e.target_id.clone(), e.edge_len)
                 };
-                // push the first node into the unitig members
+                // push the first node into the contig members
                 members.push(UnitigMember {
                     node_id: cur.clone(),
                     edge: (second.clone(), edge_len),
@@ -304,7 +303,7 @@ pub fn compress_unitigs(
                     if visited.contains(&next) {
                         break;
                     }
-                    // push cur to the unitig members
+                    // push cur to the contig members
                     members.push(UnitigMember {
                         node_id: cur.clone(),
                         edge: (next.clone(), edge_len),
@@ -319,7 +318,7 @@ pub fn compress_unitigs(
                     edge: (String::new(), 0),
                 });
 
-                // create the unitig
+                // create the contig
                 let uid = unitigs.len();
                 unitigs.push(Unitig {
                     id: uid,
@@ -331,14 +330,14 @@ pub fn compress_unitigs(
         }
     }
 
-    // 3) circular unitigs, handle remaining nodes that are still unvisited
+    // 3) circular contigs, handle remaining nodes that are still unvisited
     let circular_ids = crate::utils::order_keys(graph.nodes.keys().cloned());
     for id in &circular_ids {
         if visited.contains(id) {
             continue;
         }
 
-        // start a circular unitig
+        // start a circular contig
         let mut cur = id.clone();
         let mut members: Vec<UnitigMember> = Vec::new();
 
@@ -352,7 +351,7 @@ pub fn compress_unitigs(
             }
             let (next, edge_len) = next_edge.unwrap();
 
-            // push cur to the unitig members
+            // push cur to the contig members
             members.push(UnitigMember {
                 node_id: cur.clone(),
                 edge: (next.clone(), edge_len),
@@ -372,7 +371,7 @@ pub fn compress_unitigs(
             cur = next;
         }
 
-        // register unitig
+        // register contig
         let uid = unitigs.len();
         unitigs.push(Unitig {
             id: uid,
@@ -382,9 +381,9 @@ pub fn compress_unitigs(
         });
     }
 
-    // 4) build edges between unitigs based on original overlap graph
+    // 4) build edges between contigs based on original overlap graph
 
-    // remove empty unitigs (can happen if there are isolated nodes with no edges)
+    // remove empty contigs (can happen if there are isolated nodes with no edges)
     unitigs.retain(|u| !u.members.is_empty());
     let mut unitig_ends: HashMap<usize, (String, String)> = HashMap::new();
     // (start_node_id, end_node_id)
@@ -448,7 +447,7 @@ pub fn compress_unitigs(
 
     let mut edges: Vec<UnitigEdge> = unitig_edge_map.into_values().collect();
 
-    // remove one orientation of every unitig pair
+    // remove one orientation of every contig pair
 
     // helper function to strip the orientation from a node_id
     fn stripped_node_id(node_id: &str) -> String {
@@ -456,7 +455,7 @@ pub fn compress_unitigs(
         format!("{}:{}-{}", read, start, end)
     }
 
-    // helper function to get the signature (vector of member names) of a unitig
+    // helper function to get the signature (vector of member names) of a contig
     fn unitig_signature(u: &Unitig) -> Vec<String> {
         let mut sig: Vec<String> = u
             .members
@@ -469,9 +468,9 @@ pub fn compress_unitigs(
         sig
     }
 
-    // vector of all reads that have been used in unitigs
+    // vector of all reads that have been used in contigs
     let mut seen: HashSet<String> = HashSet::new();
-    // unitigs that should be kept
+    // contigs that should be kept
     let mut keep: HashSet<usize> = HashSet::new();
 
     unitigs.sort_unstable_by_key(|u| std::cmp::Reverse(u.members.len()));
@@ -490,17 +489,17 @@ pub fn compress_unitigs(
         }
     }
 
-    // remove unitigs
+    // remove contigs
     unitigs.retain(|u| keep.contains(&u.id));
 
-    // remove edges touching dropped unitigs
+    // remove edges touching dropped contigs
     edges.retain(|e| keep.contains(&e.from) && keep.contains(&e.to));
 
     if utils::has_seed() {
         edges.sort_unstable_by_key(|edge| (edge.from, edge.to, edge.from_ori, edge.to_ori));
     }
 
-    // load the sequences of the reads used by the unitigs
+    // load the sequences of the reads used by the contigs
     let needed: HashSet<&str> = unitigs
         .iter()
         .flat_map(|u| u.members.iter())
@@ -531,8 +530,8 @@ fn load_fastq_sequences(
     Ok(seq_map)
 }
 
-/// Build the nucleotide sequence of `unitig` by concatenating node sequences and
-/// removing the overlaps recorded in UnitigMember.edge.(target, edge_len).
+/// Build the nucleotide sequence of `contig` by concatenating node sequences and
+/// removing the overlaps recorded in each member's edge data.
 pub fn unitig_sequence(
     unitig: &Unitig,
     fastq_seqs: &HashMap<String, String>,

@@ -160,7 +160,7 @@ pub struct AlignmentFilteringArgs {
 #[derive(Args)]
 pub struct AssembleArgs {
     /// Output prefix
-    #[arg(short = 'p', long, default_value = "unitigs", help_heading = "Output")]
+    #[arg(short = 'p', long, default_value = "contigs", help_heading = "Output")]
     pub output_prefix: String,
 
     /// Output directory
@@ -221,7 +221,7 @@ pub struct AssembleArgs {
     #[command(flatten)]
     pub scaffold: ScaffoldOpts,
 
-    /// Consensus polishing rounds on the final unitigs (0 disables)
+    /// Consensus polishing rounds on the final contigs (0 disables)
     #[arg(long, default_value_t = 2u32, help_heading = "Consensus")]
     pub consensus_rounds: u32,
 
@@ -251,7 +251,7 @@ impl AssembleArgs {
 /// Contig bridging options (shared by `assemble` and `scaffold`).
 #[derive(Args, Clone)]
 pub struct ScaffoldOpts {
-    /// Contig bridging rounds (read-guided scaffolding of the final unitigs; 0 disables)
+    /// Contig bridging rounds (read-guided scaffolding of the final contigs; 0 disables)
     #[arg(long = "scaffold-rounds", default_value_t = 2u32, help_heading = "Scaffolding")]
     pub rounds: u32,
 
@@ -294,7 +294,7 @@ pub struct ScaffoldArgs {
     #[arg(long, default_value = "ont")]
     pub read_type: ReadType,
 
-    /// Consensus polishing rounds after bridging (0 = off; contig names are replaced by unitig_N)
+    /// Consensus polishing rounds after bridging (0 = off; contig names are replaced by contig_N)
     #[arg(long, default_value_t = 0u32)]
     pub polish_rounds: u32,
 
@@ -358,6 +358,15 @@ mod tests {
         assert!(assemble(&["assemble", "-r", "r.fq"]).rescue_enabled());
         assert!(!assemble(&["assemble", "-r", "r.fq", "--no-rescue"]).rescue_enabled());
         assert!(parse(&["assemble", "-r", "r.fq", "--rescue"]).is_err());
+    }
+
+    #[test]
+    fn assemble_output_prefix_defaults_to_contigs() {
+        assert_eq!(assemble(&["assemble", "-r", "r.fq"]).output_prefix, "contigs");
+        assert_eq!(
+            assemble(&["assemble", "-r", "r.fq", "--output-prefix", "assembly"]).output_prefix,
+            "assembly"
+        );
     }
 
     #[test]
