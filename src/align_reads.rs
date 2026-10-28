@@ -270,7 +270,7 @@ pub fn align_reads(
         ReadSelection::TargetCoverage => {
             let target_bases = genome_size.saturating_mul(opts.target_coverage as u64);
             crate::utils::timed_step(
-                "Select reads and align them",
+                "Select reads and align all-vs-all",
                 || -> std::io::Result<(PathBuf, usize, u64)> {
                     if aligned_all && target_bases >= total_bases {
                         Ok((filtered_all.clone(), reads.len(), total_bases))

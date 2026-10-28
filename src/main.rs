@@ -340,7 +340,7 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
         segment_dedup::remove_contained_segments(&mut compressed, &draft_path, work_dir, threads)
     })?;
     ui::detail(format!("contained contigs removed: {removed}"));
-    report_contigs("contigs after dedup", &compressed);
+    report_contigs("contigs after deduplication", &compressed);
 
     if args.scaffold.rounds > 0 {
         let stats = scaffold::scaffold_graph(&mut compressed, &assembly_reads, work_dir, &args.scaffold, threads, read_type)?;
@@ -388,14 +388,6 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
     // sequence, so they are only written when it is off.
     compressed.write_fasta(&fasta_path)?;
     compressed.write_gfa(gfa_path.to_str().ok_or("invalid output path")?, !polishing)?;
-    if !rescued_nodes.is_empty() {
-        let rescued = compressed
-            .contigs
-            .iter()
-            .filter(|u| u.members.iter().any(|m| rescued_nodes.contains(&m.node_id)))
-            .count();
-        ui::detail(format!("contigs containing rescued reads: {rescued}"));
-    }
     ui::detail(format!("wrote {} and {}", fasta_path.display(), gfa_path.display()));
     if assembly_reads != reads.primary_reads {
         std::fs::remove_file(&assembly_reads)?;
