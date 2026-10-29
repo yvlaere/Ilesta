@@ -613,6 +613,10 @@ struct DpScratch {
     row_of: Vec<u32>,
     js: Vec<u32>,
     indeg: Vec<u32>,
+    /// Substitution scores per base code (rows 0..5) and read position.
+    prof: Vec<i32>,
+    /// Running maxima of the insertion pass.
+    pv: Vec<i32>,
 }
 
 impl Poa {
@@ -719,10 +723,11 @@ impl Poa {
         }
         // Row r holds the columns [js[r], js[r] + ww) of the DP; row 0 is the
         // virtual start (h = j * GAP).
-        sc.h.clear();
-        sc.h.resize((nr + 1) * ww, NEG);
-        sc.tb.clear();
-        sc.tb.resize((nr + 1) * ww, 0);
+        // Every active cell is written before it is read; get() returns NEG outside the band.
+        if sc.h.len() < (nr + 1) * ww {
+            sc.h.resize((nr + 1) * ww, NEG);
+            sc.tb.resize((nr + 1) * ww, 0);
+        }
         sc.js.clear();
         sc.js.push(0);
         for r in 1..=nr {
@@ -738,6 +743,13 @@ impl Poa {
             let o = j.wrapping_sub(js[p] as usize);
             if o < ww { h[p * ww + o] } else { NEG }
         };
+        sc.prof.clear();
+        for b in 0..5u8 {
+            sc.prof.extend(
+                seq.iter()
+                    .map(|&x| if x == b && b < 4 { MATCH } else { MISMATCH }),
+            );
+        }
         let mut preds: Vec<u32> = Vec::with_capacity(8);
         for r in 1..=nr {
             let v = sc.rows[r - 1] as usize;
@@ -751,37 +763,109 @@ impl Poa {
             if preds.is_empty() || self.anchor[v] <= start_max_anchor {
                 preds.push(0);
             }
-            let bv = self.base[v];
+            let bv = self.base[v] as usize;
             let j0 = js[r] as usize;
-            for j in j0..=(j0 + ww - 1).min(m) {
-                let mut best = NEG;
-                let mut code = 0u32;
-                if j > 0 {
-                    let s = if bv == seq[j - 1] && bv < 4 { MATCH } else { MISMATCH };
-                    for &p in &preds {
-                        let d = get(&sc.h, p as usize, j - 1) + s;
-                        if d > best {
-                            best = d;
-                            code = p << 2;
+            let jend = (j0 + ww - 1).min(m);
+            let len = jend - j0 + 1;
+            let (done, rest) = sc.h.split_at_mut(r * ww);
+            let (_, tb_rest) = sc.tb.split_at_mut(r * ww);
+            let cur = &mut rest[..len];
+            let cur_tb = &mut tb_rest[..len];
+            cur.fill(NEG);
+            cur_tb.fill(0);
+
+            // Apply candidates in the original order; strict improvements preserve tie-breaking.
+            let jd0 = j0.max(1);
+            for &p in &preds {
+                let p = p as usize;
+                let code = (p as u32) << 2;
+                if jd0 > jend {
+                    continue;
+                }
+                let sub = &sc.prof[bv * m + jd0 - 1..bv * m + jend];
+                if p == 0 {
+                    let (hc, tc) = (&mut cur[jd0 - j0..], &mut cur_tb[jd0 - j0..]);
+                    for (((h, t), &sb), c) in
+                        hc.iter_mut().zip(tc.iter_mut()).zip(sub).zip(jd0 - 1..)
+                    {
+                        let d = c as i32 * GAP + sb;
+                        *t = if d > *h { code } else { *t };
+                        *h = (*h).max(d);
+                    }
+                } else {
+                    let jp = js[p] as usize;
+                    let lo = (jp + 1).clamp(jd0, jend + 1);
+                    let hi = (jp + ww + 1).clamp(lo, jend + 1);
+                    for j in (jd0..lo).chain(hi..=jend) {
+                        let d = NEG + sub[j - jd0];
+                        if d > cur[j - j0] {
+                            cur[j - j0] = d;
+                            cur_tb[j - j0] = code;
+                        }
+                    }
+                    if lo < hi {
+                        let src = &done[p * ww + lo - 1 - jp..p * ww + hi - 1 - jp];
+                        let sub_in = &sub[lo - jd0..hi - jd0];
+                        let (hin, tin) =
+                            (&mut cur[lo - j0..hi - j0], &mut cur_tb[lo - j0..hi - j0]);
+                        for (((h, t), &sv), &sb) in
+                            hin.iter_mut().zip(tin.iter_mut()).zip(src).zip(sub_in)
+                        {
+                            let d = sv + sb;
+                            *t = if d > *h { code } else { *t };
+                            *h = (*h).max(d);
                         }
                     }
                 }
-                for &p in &preds {
-                    let d = get(&sc.h, p as usize, j) + GAP;
-                    if d > best {
-                        best = d;
-                        code = (p << 2) | 1;
+            }
+
+            for &p in &preds {
+                let p = p as usize;
+                let code = ((p as u32) << 2) | 1;
+                if p == 0 {
+                    for ((h, t), c) in cur.iter_mut().zip(cur_tb.iter_mut()).zip(j0..) {
+                        let d = c as i32 * GAP + GAP;
+                        *t = if d > *h { code } else { *t };
+                        *h = (*h).max(d);
+                    }
+                } else {
+                    let jp = js[p] as usize;
+                    let lo = jp.clamp(j0, jend + 1);
+                    let hi = (jp + ww).clamp(lo, jend + 1);
+                    if lo < hi {
+                        let src = &done[p * ww + lo - jp..p * ww + hi - jp];
+                        let (hin, tin) =
+                            (&mut cur[lo - j0..hi - j0], &mut cur_tb[lo - j0..hi - j0]);
+                        for ((h, t), &sv) in hin.iter_mut().zip(tin.iter_mut()).zip(src) {
+                            let d = sv + GAP;
+                            *t = if d > *h { code } else { *t };
+                            *h = (*h).max(d);
+                        }
                     }
                 }
-                if j > j0 {
-                    let ins = sc.h[r * ww + j - 1 - j0] + GAP;
-                    if ins > best {
-                        best = ins;
-                        code = ((r as u32) << 2) | 2;
-                    }
+            }
+
+            if len > 1 {
+                let ins_code = ((r as u32) << 2) | 2;
+                sc.pv.clear();
+                sc.pv.reserve(len);
+                let mut run = cur[0];
+                sc.pv.push(run);
+                for (i, &h) in cur.iter().enumerate().skip(1) {
+                    sc.pv.push(run);
+                    run = run.max(h - i as i32 * GAP);
                 }
-                sc.h[r * ww + j - j0] = best;
-                sc.tb[r * ww + j - j0] = code;
+                let ins = &sc.pv[1..];
+                for (((h, t), &mx), i) in cur[1..]
+                    .iter_mut()
+                    .zip(cur_tb[1..].iter_mut())
+                    .zip(ins)
+                    .zip(1i32..)
+                {
+                    let d = mx + i * GAP;
+                    *t = if d > *h { ins_code } else { *t };
+                    *h = (*h).max(d);
+                }
             }
         }
         // best end
