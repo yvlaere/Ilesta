@@ -334,8 +334,13 @@ fn polish_round(
                     return;
                 }
                 let id = *read_id.get_or_insert_with(|| {
-                    let next = names.len() as u32;
-                    *names.entry(f[0].to_string()).or_insert(next)
+                    if let Some(&id) = names.get(f[0]) {
+                        id
+                    } else {
+                        let id = names.len() as u32;
+                        names.insert(f[0].to_owned(), id);
+                        id
+                    }
                 });
                 wins[k].push(Seg {
                     read: id,
@@ -924,14 +929,15 @@ impl Poa {
                     .iter()
                     .map(|x| x.1),
             );
-            buf.sort_unstable();
+            let median = buf.len() / 2;
+            let depth = *buf.select_nth_unstable(median).1;
             // The reference depth is the larger of the local median coverage of the path and
             // the number of read segments spanning the node's backbone position. The median
             // alone is 0 inside any run of 21+ unsupported nodes (the window holds 41 nodes),
             // and `0 >= 0.5 * 0` kept every base of such a run: poly-A/T stretches and short
             // repeats of the draft that no read supports survived the consensus.
             let spanning = span.get(nodes[i].2 as usize).copied().unwrap_or(0);
-            let depth = buf[buf.len() / 2].max(spanning);
+            let depth = depth.max(spanning);
             if (nodes[i].1 as f64) >= min_support * depth as f64 {
                 out.push(nodes[i].0);
             }

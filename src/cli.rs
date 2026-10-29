@@ -94,7 +94,7 @@ pub struct ReadOpts {
 
     /// Override minimap2's -K query minibatch size for self-alignment (e.g. 500M)
     #[arg(long, default_value = "500M", help_heading = "Read processing and alignment")]
-    pub minimap2_K: String,
+    pub minimap2_k: String,
 
     /// Override minimap2's -f high-frequency minimizer filter
     #[arg(long, help_heading = "Read processing and alignment")]
@@ -102,7 +102,7 @@ pub struct ReadOpts {
 
     /// Override minimap2's -U minimizer occurrence bounds
     #[arg(long, default_value = "10,5000", help_heading = "Read processing and alignment")]
-    pub minimap2_U: Option<String>,
+    pub minimap2_u: Option<String>,
 }
 
 /// Overlap filtering options (shared by `alignment-filtering` and `assemble`).
@@ -348,9 +348,9 @@ mod tests {
     #[test]
     fn read_options_defaults_and_overrides() {
         let a = align(&["align", "-r", "reads.fq"]);
-        assert_eq!((a.reads.target_coverage, a.reads.minimap2_K.as_str()), (50, "500M"));
-        let a = assemble(&["assemble", "-r", "r.fq", "--target-coverage", "20", "--minimap2-K", "100M"]);
-        assert_eq!((a.reads.target_coverage, a.reads.minimap2_K.as_str()), (20, "100M"));
+        assert_eq!((a.reads.target_coverage, a.reads.minimap2_k.as_str()), (50, "500M"));
+        let a = assemble(&["assemble", "-r", "r.fq", "--target-coverage", "20", "--minimap2-k", "100M"]);
+        assert_eq!((a.reads.target_coverage, a.reads.minimap2_k.as_str()), (20, "100M"));
     }
 
     #[test]

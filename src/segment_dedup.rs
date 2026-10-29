@@ -16,7 +16,7 @@ const MINIMAP2_ARGS: &[&str] = &["-x", "asm20", "-DP", "-c"];
 /// Removed contigs of at least this length are reported (replicons, not rescue fragments).
 const REPORT_MIN_LEN: u64 = 20_000;
 
-/// Remove contigs that are (>95%) contained in a longer one. `fasta` holds the current contigs
+/// Remove contigs that are (>90%) contained in a longer one. `fasta` holds the current contigs
 /// and is only used as mapping input. Returns the number of removed contigs.
 pub fn remove_contained_segments(
     assembly: &mut CompressedGraph,

@@ -89,8 +89,8 @@ pub fn run_rescue_stage(
         min_read_length: reads.min_read_length.saturating_sub(1).clamp(1, 500),
         genome_size: Some(assembly_len.clamp(1, u32::MAX as u64) as u32),
         minimap2_f: Some("0.001".into()),
-        minimap2_K: reads.minimap2_K.clone(),
-        minimap2_U: reads.minimap2_U.clone(),
+        minimap2_k: reads.minimap2_k.clone(),
+        minimap2_u: reads.minimap2_u.clone(),
         ..reads.clone()
     };
     let (rescued, rescue_overlaps, rescue_graph) =
