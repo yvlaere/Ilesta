@@ -21,7 +21,6 @@ struct Read {
 }
 
 /// Struct to hold an alignment
-#[derive(Clone)]
 struct Alignment {
     query_name: String,
     query_length: u32,
@@ -80,6 +79,27 @@ impl Alignment {
 
     fn percent_identity(&self) -> f32 {
         (self.num_matching as f32 / self.alignment_block_length as f32) * 100.0
+    }
+}
+
+fn store_alignment(
+    alignments: &mut HashMap<(usize, usize), Alignment>,
+    query_id: usize,
+    target_id: usize,
+    alignment: Alignment,
+) {
+    let key = (query_id, target_id);
+    if let Some(existing) = alignments.get(&key) {
+        if alignment.alignment_block_length > existing.alignment_block_length {
+            alignments.insert(key, alignment);
+        }
+    } else if let Some(existing) = alignments.get(&(target_id, query_id)) {
+        if alignment.alignment_block_length > existing.alignment_block_length {
+            alignments.remove(&(target_id, query_id));
+            alignments.insert(key, alignment);
+        }
+    } else {
+        alignments.insert(key, alignment);
     }
 }
 
@@ -368,9 +388,6 @@ pub fn run_alignment_filtering(
     let mut reads: Vec<Read> = Vec::new();
     // maps tuples of read ids to alignment objects
     let mut alignments: HashMap<(usize, usize), Alignment> = HashMap::new();
-    // vector to track existing alignments per read id
-    // useful for querying alignments
-    let mut alignment_ids_per_read: Vec<HashSet<usize>> = Vec::new();
     // initialize read id
     let mut next_id: usize = 0;
     // keep track of contained reads
@@ -430,7 +447,6 @@ pub fn run_alignment_filtering(
                     let id = next_id;
                     next_id += 1;
                     read_name2read_id.insert(record.query_name.clone(), id);
-                    alignment_ids_per_read.push(HashSet::new());
                     // create new read object
                     reads.push(Read {
                         per_base_coverage: vec![0; record.query_length as usize],
@@ -447,7 +463,6 @@ pub fn run_alignment_filtering(
                     let id = next_id;
                     next_id += 1;
                     read_name2read_id.insert(record.target_name.clone(), id);
-                    alignment_ids_per_read.push(HashSet::new());
                     // create new read object
                     reads.push(Read {
                         per_base_coverage: vec![0; record.target_length as usize],
@@ -462,33 +477,8 @@ pub fn run_alignment_filtering(
             let (qstart, qend) = (record.query_start as usize, record.query_end as usize);
             let (tstart, tend) = (record.target_start as usize, record.target_end as usize);
 
-            // store alignment record
-            // if multiple alignments exist between the same read pair, keep the longest one
-
-            if alignment_ids_per_read[query_id].contains(&target_id) {
-                // an alignment between these reads already exists, it may be stored under
-                // (query_id, target_id) or (target_id, query_id)
-                if let Some(existing) = alignments.get(&(query_id, target_id)) {
-                    if record.alignment_block_length > existing.alignment_block_length {
-                        // replace the existing directed entry
-                        alignments.insert((query_id, target_id), record.clone());
-                    }
-                } else if let Some(existing) = alignments.get(&(target_id, query_id)) {
-                    if record.alignment_block_length > existing.alignment_block_length {
-                        // remove the old reversed entry and store the new (keeps orientation of current record)
-                        alignments.remove(&(target_id, query_id));
-                        alignments.insert((query_id, target_id), record.clone());
-                    }
-                } else {
-                    crate::ui::warn("alignment existence inconsistency detected");
-                }
-            }
-            // we don't have an alignment between these reads yet
-            else {
-                alignment_ids_per_read[query_id].insert(target_id);
-                alignment_ids_per_read[target_id].insert(query_id);
-                alignments.insert((query_id, target_id), record);
-            }
+            // Keep only the longest alignment per read pair, regardless of record direction.
+            store_alignment(&mut alignments, query_id, target_id, record);
 
             // update read coverage statistics
             reads[query_id].per_base_coverage[qstart..qend]
@@ -531,12 +521,13 @@ pub fn run_alignment_filtering(
         read.coverage_end = best.1 as u32;
     }
 
-    // classify alignments and update contained reads set
-    for ((query_id, target_id), alignment) in &alignments {
+    // Classify and consume alignments so their allocations are released as overlaps are built.
+    let alignment_count = alignments.len();
+    for ((query_id, target_id), alignment) in alignments.drain() {
         let _alignment_type = match classify_alignment(
-            alignment,
-            *query_id,
-            *target_id,
+            &alignment,
+            query_id,
+            target_id,
             &mut overlaps,
             (*overhang_ratio) as f64,
             &reads,
@@ -550,12 +541,12 @@ pub fn run_alignment_filtering(
             }
             AlignmentType::FirstContained => {
                 // mark first read as contained
-                contained_reads.insert(*query_id);
+                contained_reads.insert(query_id);
                 continue;
             }
             AlignmentType::SecondContained => {
                 // mark second read as contained
-                contained_reads.insert(*target_id);
+                contained_reads.insert(target_id);
                 continue;
             }
             AlignmentType::ProperOverlap => {
@@ -563,6 +554,7 @@ pub fn run_alignment_filtering(
             }
         };
     }
+    drop(alignments);
 
     // filter contained reads from overlaps
     overlaps.retain(|(q_id, t_id), _| {
@@ -588,7 +580,7 @@ pub fn run_alignment_filtering(
         ui::detail(format!(
             "{} reads · {} alignments kept",
             ui::count(reads.len() as u64),
-            ui::count(alignments.len() as u64)
+            ui::count(alignment_count as u64)
         ));
         ui::detail(format!(
             "skipped: {} self, {} short, {} low-identity alignments",
@@ -647,6 +639,22 @@ mod tests {
         let mut overlaps = HashMap::new();
         classify_alignment(a, 0, 1, &mut overlaps, 0.2, reads, 500);
         overlaps.remove(&(0, 1))
+    }
+
+    #[test]
+    fn stores_only_the_longest_alignment_per_read_pair() {
+        let mut alignments = HashMap::new();
+        let mut shorter = aln(0, 1000, '+', 0, 1000);
+        shorter.alignment_block_length = 1000;
+        store_alignment(&mut alignments, 0, 1, shorter);
+
+        let mut longer = aln(0, 2000, '+', 0, 2000);
+        longer.alignment_block_length = 2000;
+        store_alignment(&mut alignments, 1, 0, longer);
+
+        assert_eq!(alignments.len(), 1);
+        assert!(alignments.contains_key(&(1, 0)));
+        assert_eq!(alignments[&(1, 0)].alignment_block_length, 2000);
     }
 
     /// t starts 1000 bp before q. q is coverage-trimmed to start at 400, so the t -> q edge is
