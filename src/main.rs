@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
 use std::io::BufReader;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn main() -> Result<(), Box<dyn Error>> {
     match Cli::parse().command {
@@ -258,35 +258,39 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
 
     // ---- 2. overlaps: provided, or filtered from the alignments ------------
     ui::stage("Overlap filtering");
-    let overlaps_path = match &args.overlaps {
+    let mut overlaps: HashMap<(usize, usize), Overlap> = match &args.overlaps {
         Some(path) => {
             ui::detail(format!("using precomputed overlaps from {path}"));
-            PathBuf::from(path)
+            utils::timed_step("Load precomputed overlaps", || {
+                Ok::<_, Box<dyn Error>>(bincode::deserialize_from(BufReader::new(File::open(path)?))?)
+            })?
         }
         None => {
-            let path = work_dir.join(format!("{}.overlaps.bin", args.output_prefix));
-            utils::timed_step("Filter read overlaps", || {
+            utils::timed_step("Filter read overlaps", || -> Result<_, Box<dyn Error>> {
                 let out = alignment_filtering::run_alignment_filtering(
                     &work_dir.join(&args.reads.paf),
                     &args.overlap,
                     true,
                 )?;
-                out.serialize_overlaps(path.to_str().ok_or("invalid output path")?)?;
-                Ok::<_, Box<dyn Error>>(())
-            })?;
-            path
+                if args.keep_intermediate {
+                    let path = work_dir.join(format!("{}.overlaps.bin", args.output_prefix));
+                    out.serialize_overlaps(path.to_str().ok_or("invalid output path")?)?;
+                    ui::detail(format!(
+                        "wrote {} overlaps to {}",
+                        ui::count(out.overlaps.len() as u64),
+                        path.display()
+                    ));
+                }
+                Ok(out.overlaps)
+            })?
         }
     };
 
     // ---- 3. graph ---------------------------------------------------------
     ui::stage("Graph construction");
-    let (mut overlaps, mut graph): (HashMap<(usize, usize), Overlap>, OverlapGraph) =
-        utils::timed_step("Create overlap graph", || {
-            let overlaps: HashMap<(usize, usize), Overlap> =
-                bincode::deserialize_from(BufReader::new(File::open(&overlaps_path)?))?;
-            let graph = create_overlap_graph::run_create_overlap_graph(&overlaps)?;
-            Ok::<_, Box<dyn Error>>((overlaps, graph))
-        })?;
+    let mut graph = utils::timed_step("Create overlap graph", || {
+        create_overlap_graph::run_create_overlap_graph(&overlaps)
+    })?;
     utils::timed_step("Clean overlap graph", || {
         cleanup_graph(&mut graph, args);
         Ok::<_, Box<dyn Error>>(())
