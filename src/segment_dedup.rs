@@ -156,6 +156,7 @@ mod tests {
             "contig_1\t100\t0\t96\t+\tcontig_2\t200\t20\t116\t96\t96\t60\n",
             "contig_3\t100\t0\t95\t+\tcontig_4\t200\t20\t115\t95\t95\t60\n",
             "contig_5\t100\t0\t99\t+\tcontig_6\t200\t20\t119\t99\t100\t60\n",
+            "contig_14\t100\t0\t90\t+\tcontig_15\t200\t20\t110\t90\t90\t60\n",
             "contig_7\t200\t0\t198\t+\tcontig_8\t100\t0\t98\t198\t198\t60\n",
             "contig_9\t100\t0\t99\t+\tcontig_9\t100\t0\t99\t99\t99\t60\n",
             "contig_10\t100\t0\t99\t+\tcontig_11\t100\t0\t99\t99\t99\t60\n",
@@ -166,7 +167,7 @@ mod tests {
 
         let contained = contained_unitig_ids(Cursor::new(paf)).unwrap();
 
-        assert_eq!(contained, [1, 5, 11].into_iter().collect());
+        assert_eq!(contained, [1, 3, 5, 11].into_iter().collect());
     }
 
     #[test]
