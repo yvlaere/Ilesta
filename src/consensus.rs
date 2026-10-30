@@ -72,6 +72,11 @@ const MIN_IDENTITY: f64 = 0.6;
 const MIN_SUPPORT: f64 = 0.5;
 /// Flank (bp) added to each side of circular contigs while mapping.
 const CIRC_FLANK: usize = 2000;
+/// Context added on both sides of a window. Reads are cut at the extended borders and only the
+/// consensus of the core is kept: the bases next to a cut are the least reliable (a read that
+/// ends there has no context to resolve homopolymers/indels), so without a margin the number
+/// of avoidable errors grows with the number of window borders.
+const WINDOW_MARGIN: usize = 50;
 /// Contigs shorter than this are left untouched.
 const MIN_CONTIG_LEN: usize = 100;
 
@@ -152,22 +157,30 @@ struct Layout {
     len: usize,
     flank: usize,
     circular: bool,
-    /// Window borders in contig coordinates: bounds[0]=0, bounds[K]=len.
+    /// Core borders in contig coordinates: bounds[0]=0, bounds[K]=len.
     bounds: Vec<usize>,
-    /// Border positions in coordinates of the (flanked) mapping reference.
+    /// Extended interval of every window (contig coordinates).
+    xs: Vec<usize>,
+    xe: Vec<usize>,
+    /// Border positions (all `xs`, `xe`) in coordinates of the (flanked) mapping reference.
     ext_bounds: Vec<usize>,
 }
 
 impl Layout {
-    fn new(len: usize, circular: bool, window_len: usize) -> Layout {
+    fn new(len: usize, circular: bool, window_len: usize, margin: usize) -> Layout {
         let flank = if circular { CIRC_FLANK.min(len / 2) } else { 0 };
         let k = ((len as f64 / window_len as f64).round() as usize).max(1);
         let bounds: Vec<usize> = (0..=k).map(|i| i * len / k).collect();
+        // an extended interval may overlap its neighbours but never reach past them
+        let min_core = bounds.windows(2).map(|w| w[1] - w[0]).min().unwrap_or(len);
+        let margin = margin.min(min_core.saturating_sub(2) / 2);
+        let xs: Vec<usize> = (0..k).map(|i| bounds[i].saturating_sub(margin)).collect();
+        let xe: Vec<usize> = (0..k).map(|i| (bounds[i + 1] + margin).min(len)).collect();
         let ext_len = len + 2 * flank;
         let mut ext_bounds = Vec::new();
         let shifts: &[isize] = if circular { &[-1, 0, 1] } else { &[0] };
         for &t in shifts {
-            for &b in &bounds {
+            for &b in xs.iter().chain(&xe).chain(&[0, len]) {
                 let x = flank as isize + b as isize + t * len as isize;
                 if x > 0 && (x as usize) < ext_len {
                     ext_bounds.push(x as usize);
@@ -181,6 +194,8 @@ impl Layout {
             flank,
             circular,
             bounds,
+            xs,
+            xe,
             ext_bounds,
         }
     }
@@ -189,9 +204,8 @@ impl Layout {
         self.bounds.len() - 1
     }
 
-    /// Map an ext-coordinate interval (not crossing a border) to
-    /// (window index, begin offset, end offset) in contig coordinates.
-    fn canonical(&self, ts: usize, te: usize) -> Option<(usize, usize, usize)> {
+    /// Contig coordinates of an ext-coordinate interval (not crossing a border).
+    fn to_contig(&self, ts: usize, te: usize) -> Option<(usize, usize)> {
         let (mut ts, mut te) = (ts, te);
         if self.circular {
             if ts < self.flank {
@@ -207,14 +221,17 @@ impl Layout {
         }
         let y = ts - self.flank;
         let y_end = te - self.flank;
-        if y >= self.len {
+        if y >= self.len || y_end > self.len {
             return None;
         }
-        let k = self.bounds.partition_point(|&b| b <= y) - 1;
-        if y_end > self.bounds[k + 1] {
-            return None; // should not happen
-        }
-        Some((k, y - self.bounds[k], y_end - self.bounds[k]))
+        Some((y, y_end))
+    }
+
+    /// Windows (as a half-open index range) whose extended interval contains `[y, y_end)`.
+    fn covering(&self, y: usize, y_end: usize) -> std::ops::Range<usize> {
+        let last = self.xs.partition_point(|&x| x <= y);
+        let first = self.xe.partition_point(|&x| x < y_end);
+        first..last.max(first)
     }
 }
 
@@ -252,7 +269,7 @@ fn polish_round(
                 layouts.push(None);
                 continue;
             }
-            let lay = Layout::new(c.seq.len(), c.circular, p.window_len.max(50));
+            let lay = Layout::new(c.seq.len(), c.circular, p.window_len.max(50), WINDOW_MARGIN);
             writeln!(f, ">c{i}")?;
             if lay.flank > 0 {
                 f.write_all(&c.seq[c.seq.len() - lay.flank..])?;
@@ -325,13 +342,27 @@ fn polish_round(
             let ident = matches as f32 / block as f32;
             let mut read_id: Option<u32> = None;
             let wins = &mut windows[ci];
+            // pieces between two borders; a window collects the pieces of its extended interval
+            let mut acc: Vec<(usize, usize, usize, usize, usize)> = Vec::new(); // (k, qs, qe, y, y_end)
             split_cigar(cigar, tstart, q0, &lay.ext_bounds, |ts, te, qs, qe| {
-                let Some((k, b, e)) = lay.canonical(ts, te) else {
+                let Some((y, y_end)) = lay.to_contig(ts, te) else {
                     return;
                 };
-                let win_len = lay.bounds[k + 1] - lay.bounds[k];
+                for k in lay.covering(y, y_end) {
+                    match acc.iter_mut().rev().find(|a| a.0 == k && a.4 == y) {
+                        Some(a) => {
+                            a.2 = qe;
+                            a.4 = y_end;
+                        }
+                        None => acc.push((k, qs, qe, y, y_end)),
+                    }
+                }
+            });
+            for (k, qs, qe, y, y_end) in acc {
+                let win_len = lay.xe[k] - lay.xs[k];
+                let (b, e) = (y - lay.xs[k], y_end - lay.xs[k]);
                 if qe <= qs || (e - b) * 2 < win_len {
-                    return;
+                    continue;
                 }
                 let id = *read_id.get_or_insert_with(|| {
                     if let Some(&id) = names.get(f[0]) {
@@ -352,7 +383,7 @@ fn polish_round(
                     e: e as u32,
                     ident,
                 });
-            });
+            }
         }
     }
     let _ = std::fs::remove_file(&paf_path);
@@ -365,7 +396,7 @@ fn polish_round(
             continue;
         };
         for (k, segs) in per_contig.iter_mut().enumerate() {
-            let wl = (lay.bounds[k + 1] - lay.bounds[k]) as u32;
+            let wl = (lay.xe[k] - lay.xs[k]) as u32;
             if segs.len() > p.max_depth {
                 segs.sort_by(|a, b| {
                     let fa = a.b <= SLACK && a.e + SLACK >= wl;
@@ -420,7 +451,7 @@ fn polish_round(
                     }
                     let (ci, k) = tasks[t];
                     let lay = layouts[ci].as_ref().unwrap();
-                    let draft: Vec<u8> = contigs_ro[ci].seq[lay.bounds[k]..lay.bounds[k + 1]]
+                    let draft: Vec<u8> = contigs_ro[ci].seq[lay.xs[k]..lay.xe[k]]
                         .iter()
                         .map(|&b| encode(b))
                         .collect();
@@ -432,7 +463,14 @@ fn polish_round(
                             .iter()
                             .map(|s| make_layer(s, &reads[s.read as usize]))
                             .collect();
-                        poa_window(&mut poa, &mut scratch, &draft, &layers)
+                        // keep only the bases whose backbone anchor lies in the core
+                        let (c0, c1) = ((lay.bounds[k] - lay.xs[k]) as u32, (lay.bounds[k + 1] - lay.xs[k]) as u32);
+                        poa_window(&mut poa, &mut scratch, &draft, &layers).map(|cons| {
+                            cons.into_iter()
+                                .filter(|&(_, a)| a >= c0 && a < c1)
+                                .map(|x| x.0)
+                                .collect::<Vec<u8>>()
+                        })
                     };
                     out.push((t, res));
                 }
@@ -964,7 +1002,7 @@ impl Poa {
 
     /// Heaviest path through the graph.
     /// `span[a]` is the number of read segments spanning backbone position `a`.
-    fn consensus(&self, order: &[u32], min_support: f64, span: &[u32]) -> Vec<u8> {
+    fn consensus(&self, order: &[u32], min_support: f64, span: &[u32]) -> Vec<(u8, u32)> {
         let n = self.base.len();
         let mut score = vec![0u64; n];
         let mut back = vec![NONE; n];
@@ -1023,7 +1061,7 @@ impl Poa {
             let spanning = span.get(nodes[i].2 as usize).copied().unwrap_or(0);
             let depth = depth.max(spanning);
             if (nodes[i].1 as f64) >= min_support * depth as f64 {
-                out.push(nodes[i].0);
+                out.push((nodes[i].0, nodes[i].2));
             }
         }
         out
@@ -1031,7 +1069,7 @@ impl Poa {
 }
 
 /// Build and solve the POA of one window.  `None` keeps the draft.
-fn poa_window(poa: &mut Poa, sc: &mut DpScratch, draft: &[u8], layers: &[Layer]) -> Option<Vec<u8>> {
+fn poa_window(poa: &mut Poa, sc: &mut DpScratch, draft: &[u8], layers: &[Layer]) -> Option<Vec<(u8, u32)>> {
     if draft.is_empty() || layers.is_empty() {
         return None;
     }
@@ -1149,7 +1187,7 @@ mod tests {
             .collect();
         let mut poa = Poa::new();
         let mut sc = DpScratch::default();
-        let cons = poa_window(&mut poa, &mut sc, &draft, &layers).unwrap();
+        let cons: Vec<u8> = poa_window(&mut poa, &mut sc, &draft, &layers).unwrap().into_iter().map(|x| x.0).collect();
         assert_eq!(cons, truth, "consensus should equal the truth at 25x");
     }
 
@@ -1171,7 +1209,7 @@ mod tests {
                 .collect();
             let mut poa = Poa::new();
             let mut sc = DpScratch::default();
-            let cons = poa_window(&mut poa, &mut sc, &draft, &layers).expect("window re-called");
+            let cons: Vec<u8> = poa_window(&mut poa, &mut sc, &draft, &layers).expect("window re-called").into_iter().map(|x| x.0).collect();
             let diff = cons.iter().zip(&truth).filter(|(a, b)| a != b).count();
             assert!(cons.len().abs_diff(truth.len()) <= 2 && diff <= 3, "missing {missing}, extra {extra}: len {} vs {}, {diff} differ", cons.len(), truth.len());
         }
@@ -1211,8 +1249,11 @@ mod tests {
                         .collect();
                     let mut poa = Poa::new();
                     let mut sc = DpScratch::default();
-                    let cons = poa_window(&mut poa, &mut sc, &draft, &layers)
-                        .unwrap_or_else(|| panic!("{kind} x{junk}, depth {depth}: window rejected"));
+                    let cons: Vec<u8> = poa_window(&mut poa, &mut sc, &draft, &layers)
+                        .unwrap_or_else(|| panic!("{kind} x{junk}, depth {depth}: window rejected"))
+                        .into_iter()
+                        .map(|x| x.0)
+                        .collect();
                     let d = edit_distance(&cons, &truth);
                     assert!(
                         d <= 4,
@@ -1240,13 +1281,11 @@ mod tests {
 
     #[test]
     fn circular_layout_maps_flanks_back() {
-        let lay = Layout::new(10_000, true, 500);
+        let lay = Layout::new(10_000, true, 500, 0);
         assert_eq!(lay.flank, CIRC_FLANK);
         // left flank position 0 == contig base 8000
-        let (k, b, _) = lay.canonical(0, 100).unwrap();
-        assert_eq!(lay.bounds[k] + b, 8000);
+        assert_eq!(lay.to_contig(0, 100), Some((8000, 8100)));
         // right flank == contig base 0
-        let (k, b, _) = lay.canonical(lay.flank + 10_000, lay.flank + 10_100).unwrap();
-        assert_eq!(lay.bounds[k] + b, 0);
+        assert_eq!(lay.to_contig(lay.flank + 10_000, lay.flank + 10_100), Some((0, 100)));
     }
 }
