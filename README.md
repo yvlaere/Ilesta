@@ -2,7 +2,9 @@
 
 [![DOI](https://zenodo.org/badge/1043754381.svg)](https://doi.org/10.5281/zenodo.18699305)
 
-Ilesta assembles long reads using the Overlap-Layout-Consensus approach.
+Ilesta assembles long reads (ONT or PacBio) using the Overlap-Layout-Consensus approach. It finds overlaps between reads, builds and simplifies an overlap graph, and calls a consensus sequence for the final contigs.
+
+[Install](#-installation) · [Quick usage](#-quick-usage) · [How it works](#-how-it-works) · [Command line usage](#-command-line-usage)
 
 ## Installation
 
@@ -10,17 +12,26 @@ Ilesta uses [minimap2](https://github.com/lh3/minimap2) for read alignment. The 
 
 ### Option 1: Bioconda (recommended)
 
+#### Using Conda
+
 ```bash
-conda create -n ilesta_env -c bioconda ilesta
+conda create -n ilesta_env -c conda-forge -c bioconda ilesta
 conda activate ilesta_env
+```
+
+#### Using Pixi
+
+```bash
+mkdir ilesta_workspace && cd ilesta_workspace
+pixi init
+pixi add -c conda-forge -c bioconda ilesta
 ```
 
 ### Option 2: Precompiled binary
 
 ```bash
-mkdir Ilesta
-cd Ilesta
-wget https://github.com/yvlaere/Ilesta/releases/download/v1.5.0/ilesta-linux-x86_64
+mkdir Ilesta && cd Ilesta
+wget https://github.com/yvlaere/Ilesta/releases/latest/download/ilesta-linux-x86_64
 chmod +x ilesta-linux-x86_64
 mv ilesta-linux-x86_64 Ilesta
 
@@ -44,7 +55,7 @@ export PATH="$PWD/target/release:$PATH"
 ## Quick usage
 
 > [!CAUTION]
->For Ilesta versions earlier than 1.5.0, use `--overhang-ratio 0.2` when running `assemble`. This improves assembly completeness, especially in datasets with lower coverage or shorter reads.
+> For Ilesta versions earlier than 1.5.0, use `--overhang-ratio 0.2` when running `assemble`. This improves assembly completeness, especially in datasets with lower coverage or shorter reads.
 
 ```bash
 Ilesta assemble \
@@ -55,7 +66,7 @@ Ilesta assemble \
   --min-base-quality 10
 ```
 
-The read-length and mean-quality filters are optional and read filtering is **disabled by default**. FASTQ input may be plain or gzip-compressed. Ilesta estimates genome size from read overlaps unless `--genome-size` is supplied.
+The read-length and mean-quality filters are optional and read filtering is **disabled by default**. FASTQ input may be plain or gzip-compressed. Ilesta estimates genome size from read overlaps unless `--genome-size` is supplied. Use `--read-type` to select `ont` (default), `pb-clr` or `pb-hifi`.
 
 ### Output files
 
@@ -64,6 +75,14 @@ The read-length and mean-quality filters are optional and read filtering is **di
 | `contigs.fa` | Final assembled contigs in FASTA format. |
 | `contigs.gfa` | Final assembly graph in GFA format. |
 
+Intermediate files (alignments, selected reads, overlaps) are removed by default. Add `--keep-intermediate` to keep them.
+
+## How it works
+
+1. **Prepare and align reads.** Optional length and quality filters are applied, then reads are selected up to the target coverage. Ilesta estimates genome size from the overlaps unless you provide it, and uses minimap2 to find read-to-read overlaps.
+2. **Build the overlap graph.** Filtered overlaps become an oriented graph of reads. Ilesta simplifies the graph by removing transitive and redundant edges, bubbles, and tips, then compresses graph paths into draft contigs.
+3. **Refine contigs.** By default, Ilesta tries to rescue reads that are poorly represented in the draft. It removes contained contigs, uses read evidence to bridge contigs, and detects circular contigs from overlapping ends.
+4. **Polish and write output.** By default, reads are mapped back to contigs for windowed consensus polishing. The final assembly is written as `contigs.fa` and `contigs.gfa`.
 
 ## Command Line Usage
 
