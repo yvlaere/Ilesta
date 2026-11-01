@@ -24,6 +24,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::cli::ReadType;
 use crate::compress_graph::CompressedGraph;
 
+mod repair;
+
 // ---------------------------------------------------------------------------
 // Parameters / statistics
 // ---------------------------------------------------------------------------
@@ -41,6 +43,9 @@ pub struct ConsensusParams {
     pub max_depth: usize,
     pub threads: usize,
     pub read_type: ReadType,
+    /// Replace stretches of the draft that no read supports but that many reads bridge
+    /// (see `repair`). Off by default.
+    pub repair: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -51,6 +56,9 @@ pub struct ConsensusStats {
     pub windows_unsupported: usize,
     pub bases_before: usize,
     pub bases_after: usize,
+    /// Stretches replaced by the gap repair, and the number of draft bases they replaced.
+    pub repairs: usize,
+    pub repaired_bases: usize,
 }
 
 // POA scoring (linear gaps).
@@ -113,12 +121,31 @@ pub fn polish_graph(
     for round in 1..=params.rounds {
         let round_stats = crate::utils::timed_step(
             &format!("Consensus round {round}/{}", params.rounds),
-            || polish_round(&mut contigs, reads_path, work_dir, params, round),
+            || {
+                let first = polish_round(&mut contigs, reads_path, work_dir, params, round, params.repair)?;
+                if first.repairs == 0 {
+                    return Ok::<_, Box<dyn Error>>(first);
+                }
+                // the contigs were changed by the repair: map and polish again, without repairing
+                let mut second = polish_round(&mut contigs, reads_path, work_dir, params, round, false)?;
+                second.repairs = first.repairs;
+                second.repaired_bases = first.repaired_bases;
+                Ok(second)
+            },
         )?;
         stats.rounds_run += 1;
         stats.windows_total = round_stats.windows_total;
         stats.windows_changed += round_stats.windows_changed;
         stats.windows_unsupported = round_stats.windows_unsupported;
+        stats.repairs += round_stats.repairs;
+        stats.repaired_bases += round_stats.repaired_bases;
+        if round_stats.repairs > 0 {
+            crate::ui::detail(format!(
+                "round {round}: repaired {} unsupported stretch(es) ({} draft bases replaced)",
+                round_stats.repairs,
+                crate::ui::count(round_stats.repaired_bases as u64)
+            ));
+        }
         crate::ui::detail(format!(
             "round {round}: {} of {} windows changed, {} without enough read support",
             crate::ui::count(round_stats.windows_changed as u64),
@@ -238,6 +265,7 @@ fn polish_round(
     work_dir: &Path,
     p: &ConsensusParams,
     round: u32,
+    allow_repair: bool,
 ) -> Result<ConsensusStats, Box<dyn Error>> {
     let threads = p.threads.max(1);
 
@@ -355,6 +383,40 @@ fn polish_round(
             });
         }
     }
+
+    // ---- 3b. optional repair of stretches that no read supports ------------
+    // The contigs are changed and the round is run again by the caller on the new sequence.
+    if allow_repair {
+        let runs = repair::unsupported_runs(&windows, p.min_depth);
+        let found = if runs.is_empty() {
+            Vec::new()
+        } else {
+            repair::find_repairs(&paf_path, reads_path, &layouts, &runs)?
+        };
+        let applied = repair::apply(contigs, found);
+        for r in &applied {
+            crate::ui::detail(format!(
+                "repair: contig {} {}..{} ({} bp) replaced by {} bp from {} bridging reads ({} supported the draft)",
+                r.contig,
+                r.start,
+                r.end,
+                r.end - r.start,
+                r.seq.len(),
+                r.bridging,
+                r.supporting_draft
+            ));
+        }
+        if !applied.is_empty() {
+            let _ = std::fs::remove_file(&paf_path);
+            let _ = std::fs::remove_file(&ref_path);
+            return Ok(ConsensusStats {
+                repairs: applied.len(),
+                repaired_bases: applied.iter().map(|r| r.end - r.start).sum(),
+                ..Default::default()
+            });
+        }
+    }
+
     let _ = std::fs::remove_file(&paf_path);
     let _ = std::fs::remove_file(&ref_path);
 

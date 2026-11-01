@@ -237,6 +237,10 @@ pub struct AssembleArgs {
     #[arg(long, default_value_t = 25usize, help_heading = "Consensus")]
     pub consensus_max_depth: usize,
 
+    /// Replace stretches that no read supports but that many reads bridge (aggressive polishing)
+    #[arg(long, help_heading = "Consensus")]
+    pub consensus_repair: bool,
+
     /// Seed (the same seed gives the same result)
     #[arg(long, default_value_t = 42u64, help_heading = "Assembly")]
     pub seed: u64,
@@ -297,6 +301,10 @@ pub struct ScaffoldArgs {
     /// Consensus polishing rounds after bridging (0 = off; contig names are replaced by contig_N)
     #[arg(long, default_value_t = 0u32)]
     pub polish_rounds: u32,
+
+    /// With --polish-rounds: replace stretches that no read supports but that many reads bridge
+    #[arg(long)]
+    pub polish_repair: bool,
 
     #[command(flatten)]
     pub scaffold: ScaffoldOpts,
