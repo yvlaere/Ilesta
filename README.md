@@ -4,7 +4,7 @@
 
 Ilesta assembles long reads (ONT or PacBio) using the Overlap-Layout-Consensus approach. It finds overlaps between reads, builds and simplifies an overlap graph, and calls a consensus sequence for the final contigs.
 
-[Install](#-installation) · [Quick usage](#-quick-usage) · [How it works](#-how-it-works) · [Command line usage](#-command-line-usage)
+[Install](#installation) · [Quick usage](#quick-usage) · [How it works](#how-it-works) · [Command line usage](#command-line-usage)
 
 ## Installation
 
