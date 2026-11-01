@@ -81,6 +81,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     max_depth: 25,
                     threads: args.threads,
                     read_type: args.read_type,
+                    repair: args.polish_repair,
                 };
                 ui::stage("Consensus polishing");
                 let stats = consensus::polish_graph(&mut graph, reads, work_dir, &params)?;
@@ -364,6 +365,7 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
             max_depth: args.consensus_max_depth,
             threads,
             read_type,
+            repair: args.consensus_repair,
         };
         let stats = consensus::polish_graph(&mut compressed, &assembly_reads, work_dir, &params)?;
         ui::detail(format!(
