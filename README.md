@@ -39,7 +39,15 @@ mv ilesta-linux-x86_64 Ilesta
 export PATH="$PWD:$PATH"
 ```
 
-### Option 3: Build from source
+### Option 3: Cargo (crates.io)
+
+Requires Rust 1.85.0 or later.
+
+```bash
+cargo install ilesta
+```
+
+### Option 4: Build from source
 
 Use a Rust toolchain that satisfies the requirements in `Cargo.toml`.
 
