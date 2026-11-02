@@ -10,7 +10,9 @@ path = "src/main.rs"
 
 [profile.dev]
 
-
+[profile.release]
+codegen-units = 1
+lto = true
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
