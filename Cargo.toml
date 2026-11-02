@@ -1,8 +1,14 @@
 [package]
-name = "Ilesta"
+name = "ilesta"
 version = "1.5.1"
 edition = "2024"
+description = "De novo genome assembly for long reads using an overlap graph"
+license = "GPL-3.0-only"
+repository = "https://github.com/yvlaere/Ilesta"
+readme = "README.md"
 rust-version = "1.85.0"
+keywords = ["bioinformatics", "genomics", "genome-assembly", "long-reads"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "Ilesta"
