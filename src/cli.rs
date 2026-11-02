@@ -237,9 +237,9 @@ pub struct AssembleArgs {
     #[arg(long, default_value_t = 25usize, help_heading = "Consensus")]
     pub consensus_max_depth: usize,
 
-    /// Replace stretches that no read supports but that many reads bridge (aggressive polishing)
-    #[arg(long, help_heading = "Consensus")]
-    pub consensus_repair: bool,
+    /// Disable replacement of stretches that no read supports but that many reads bridge
+    #[arg(long, action = clap::ArgAction::SetTrue, help_heading = "Consensus")]
+    pub no_consensus_repair: bool,
 
     /// Seed (the same seed gives the same result)
     #[arg(long, default_value_t = 42u64, help_heading = "Assembly")]
@@ -249,6 +249,10 @@ pub struct AssembleArgs {
 impl AssembleArgs {
     pub fn rescue_enabled(&self) -> bool {
         !self.no_rescue
+    }
+
+    pub fn consensus_repair_enabled(&self) -> bool {
+        !self.no_consensus_repair
     }
 }
 
@@ -303,7 +307,7 @@ pub struct ScaffoldArgs {
     pub polish_rounds: u32,
 
     /// With --polish-rounds: replace stretches that no read supports but that many reads bridge
-    #[arg(long)]
+    #[arg(long, action = clap::ArgAction::SetFalse, default_value_t = true)]
     pub polish_repair: bool,
 
     #[command(flatten)]

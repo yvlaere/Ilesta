@@ -206,8 +206,8 @@ Consensus:
           Minimum read segments per window to re-call it (else keep draft) [default: 3]
       --consensus-max-depth <CONSENSUS_MAX_DEPTH>
           Maximum read segments used per window [default: 25]
-      --consensus-repair
-          Replace stretches that no read supports but that many reads bridge (aggressive polishing)
+      --no-consensus-repair
+          Disable replacement of stretches that no read supports but that many reads bridge
 ```
 
 ## Development

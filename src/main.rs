@@ -365,7 +365,7 @@ fn run_assembly(args: &AssembleArgs, out_dir: &Path, work_dir: &Path) -> Result<
             max_depth: args.consensus_max_depth,
             threads,
             read_type,
-            repair: args.consensus_repair,
+            repair: args.consensus_repair_enabled(),
         };
         let stats = consensus::polish_graph(&mut compressed, &assembly_reads, work_dir, &params)?;
         ui::detail(format!(

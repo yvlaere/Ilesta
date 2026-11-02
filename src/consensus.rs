@@ -44,7 +44,7 @@ pub struct ConsensusParams {
     pub threads: usize,
     pub read_type: ReadType,
     /// Replace stretches of the draft that no read supports but that many reads bridge
-    /// (see `repair`). Off by default.
+    /// (see `repair`). On by default in `assemble`, off in the standalone `scaffold` polishing.
     pub repair: bool,
 }
 
