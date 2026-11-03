@@ -1,6 +1,6 @@
 [package]
 name = "ilesta"
-version = "1.5.1"
+version = "1.5.2"
 edition = "2024"
 description = "De novo genome assembly for long reads using an overlap graph"
 license = "GPL-3.0-only"
